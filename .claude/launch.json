@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ps1tl-gui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-c", "from ps1tl.gui import serve; serve(r'roms/Yuuyami Doori Tankentai (Japan).cue', open_browser=False)"],
+      "port": 8732
+    }
+  ]
+}

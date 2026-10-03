@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Ps1tl.App/Ps1tl.App.csproj" />
+  <Project Path="Ps1tl.Cli/Ps1tl.Cli.csproj" />
+  <Project Path="Ps1tl.Core/Ps1tl.Core.csproj" />
+</Solution>
