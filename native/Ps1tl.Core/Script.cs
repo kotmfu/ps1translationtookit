@@ -4,8 +4,8 @@ using System.Text.Json.Serialization;
 
 namespace Ps1tl;
 
-/// <summary>A translation project: the same &lt;rom&gt;.script.json the Python tool reads and writes.
-/// Unknown fields are kept (ExtensionData) so the two tools can share a project.</summary>
+/// <summary>A translation project (&lt;rom&gt;.script.json). Unknown fields are kept (ExtensionData), so files from
+/// older or newer versions round-trip without losing data.</summary>
 public sealed class Script
 {
     [JsonPropertyName("game")] public string Game { get; set; } = "";
@@ -13,6 +13,10 @@ public sealed class Script
     [JsonPropertyName("lines")] public List<Line> Lines { get; set; } = new();
     [JsonPropertyName("images")] public Dictionary<string, ImageEntry>? Images { get; set; }
     [JsonPropertyName("chars")] public Dictionary<string, string>? Chars { get; set; }
+    /// <summary>glyphs whose character a person confirmed in the glyph grid; learning never overrides them</summary>
+    [JsonPropertyName("chars_ok")] public HashSet<string>? CharsOk { get; set; }
+    /// <summary>keys of lines the last build could not fit (they wrap in game)</summary>
+    [JsonPropertyName("too_long")] public HashSet<string>? TooLong { get; set; }
     [JsonPropertyName("extractor")] public int? Extractor { get; set; }
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
@@ -50,7 +54,12 @@ public sealed class Line
     [JsonPropertyName("glyphs")] public List<string> Glyphs { get; set; } = new();
     [JsonPropertyName("refs")] public List<string> Refs { get; set; } = new();
     [JsonPropertyName("ja")] public string Ja { get; set; } = "";
+    /// <summary>where Ja came from: "pic" = Claude read the whole line from its picture, "user" = typed or fixed
+    /// by a person, null = filled from the glyph table. Only pic/user lines teach the glyph table.</summary>
+    [JsonPropertyName("ja_src")] public string? JaSource { get; set; }
     [JsonPropertyName("en")] public string En { get; set; } = "";
+    /// <summary>"scene" = En was written with its whole scene as context (sentences across rows); null = row by row</summary>
+    [JsonPropertyName("tl")] public string? Tl { get; set; }
     [JsonPropertyName("notes")] public string? Notes { get; set; }
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
@@ -71,7 +80,7 @@ public sealed class ImageEntry
 [JsonSerializable(typeof(string))]
 public partial class ScriptJson : JsonSerializerContext
 {
-    /// <summary>Japanese stays readable in the file, like Python's ensure_ascii=False</summary>
+    /// <summary>Japanese stays readable in the file (not \u-escaped)</summary>
     public static ScriptJson Relaxed { get; } = new(new JsonSerializerOptions
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,

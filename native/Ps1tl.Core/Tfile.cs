@@ -79,7 +79,7 @@ public static class Tfile
         return (updated, unknown);
     }
 
-    /// <summary>RFC 4180 CSV (what Python's csv module and Excel write)</summary>
+    /// <summary>RFC 4180 CSV (what Excel and spreadsheet tools write)</summary>
     public static List<List<string>> ParseCsv(string text)
     {
         var rows = new List<List<string>>();

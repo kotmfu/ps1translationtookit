@@ -9,8 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- the same font files the Python tool uses -->
-    <EmbeddedResource Include="..\..\ps1tl\fonts\*.txt" LogicalName="fonts.%(Filename).txt" />
+    <!-- built-in pixel fonts -->
+    <EmbeddedResource Include="fonts\*.txt" LogicalName="fonts.%(Filename).txt" />
+    <!-- picture text read by hand (file, entry, Japanese, English) that a game's extract adds as lines -->
+    <EmbeddedResource Include="seeds\*.json" LogicalName="seeds.%(Filename).json" />
   </ItemGroup>
 
   <ItemGroup>

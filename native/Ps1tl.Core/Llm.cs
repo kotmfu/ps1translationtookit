@@ -47,7 +47,7 @@ public static class Llm
     public static string? Backend() =>
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")) ? "api" : ClaudePath() != null ? "cli" : null;
 
-    public static JsonElement Ask(byte[] png, string prompt, string schema, string system = "", string model = "opus", string effort = "high") =>
+    public static JsonElement Ask(byte[]? png, string prompt, string schema, string system = "", string model = "opus", string effort = "high") =>
         Backend() switch
         {
             "api" => Api(png, prompt, schema, system, model, effort),
@@ -86,7 +86,7 @@ public static class Llm
         }
     }
 
-    static JsonElement Api(byte[] png, string prompt, string schema, string system, string model, string effort)
+    static JsonElement Api(byte[]? png, string prompt, string schema, string system, string model, string effort)
     {
         var client = new AnthropicClient();
         var schemaDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(schema)!;
@@ -94,11 +94,13 @@ public static class Llm
         {
             Model = Models[model],
             MaxTokens = 16000,
-            Messages = [new() { Role = Role.User, Content = new List<ContentBlockParam>
-            {
-                new ImageBlockParam { Source = new Base64ImageSource { Data = Convert.ToBase64String(png), MediaType = MediaType.ImagePng } },
-                new TextBlockParam { Text = prompt },
-            } }],
+            Messages = [new() { Role = Role.User, Content = png == null
+                ? new List<ContentBlockParam> { new TextBlockParam { Text = prompt } }
+                : new List<ContentBlockParam>
+                {
+                    new ImageBlockParam { Source = new Base64ImageSource { Data = Convert.ToBase64String(png), MediaType = MediaType.ImagePng } },
+                    new TextBlockParam { Text = prompt },
+                } }],
             OutputConfig = model == "haiku"   // no effort setting on Haiku 4.5
                 ? new OutputConfig { Format = new JsonOutputFormat { Schema = schemaDict } }
                 : new OutputConfig { Effort = effort switch { "low" => Effort.Low, "medium" => Effort.Medium, "max" => Effort.Max, _ => Effort.High },
@@ -124,21 +126,17 @@ public static class Llm
         return JsonDocument.Parse(text.ToString()).RootElement.Clone();
     }
 
-    static JsonElement Cli(byte[] png, string prompt, string schema, string system, string model, string effort)
+    static JsonElement Cli(byte[]? png, string prompt, string schema, string system, string model, string effort)
     {
+        var content = new System.Text.Json.Nodes.JsonArray();
+        if (png != null)
+            content.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["type"] = "image", ["source"] = new System.Text.Json.Nodes.JsonObject
+                { ["type"] = "base64", ["media_type"] = "image/png", ["data"] = Convert.ToBase64String(png) } });
+        content.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["type"] = "text", ["text"] = prompt });
         var msg = new System.Text.Json.Nodes.JsonObject
         {
             ["type"] = "user",
-            ["message"] = new System.Text.Json.Nodes.JsonObject
-            {
-                ["role"] = "user",
-                ["content"] = new System.Text.Json.Nodes.JsonArray
-                {
-                    new System.Text.Json.Nodes.JsonObject { ["type"] = "image", ["source"] = new System.Text.Json.Nodes.JsonObject
-                        { ["type"] = "base64", ["media_type"] = "image/png", ["data"] = Convert.ToBase64String(png) } },
-                    new System.Text.Json.Nodes.JsonObject { ["type"] = "text", ["text"] = prompt },
-                },
-            },
+            ["message"] = new System.Text.Json.Nodes.JsonObject { ["role"] = "user", ["content"] = content },
         }.ToJsonString();
         var psi = new ProcessStartInfo(ClaudePath()!)
         {

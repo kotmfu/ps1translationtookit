@@ -36,7 +36,7 @@ public static class Flb
             bool dir = tag >> 24 >= 2;
             items.Add(new Item(i, dir, dir ? U32(b, toff + off * 16) : off));
         }
-        var order = items.OrderBy(t => t.Offset).ToList();   // stable, like Python's sorted
+        var order = items.OrderBy(t => t.Offset).ToList();   // stable: equal offsets keep entry order
         var spans = new Dictionary<int, (int, int)>();
         for (int k = 0; k < order.Count; k++)
             spans[order[k].Index] = (order[k].Offset, k + 1 < order.Count ? order[k + 1].Offset : total);

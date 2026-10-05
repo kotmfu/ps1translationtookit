@@ -1,8 +1,7 @@
 # ps1tl native app
 
 The PS1 translation editor as a native desktop app (C# / .NET 10 + Avalonia), for Windows and Linux.
-No Python needed. It opens the same `<rom>.script.json` project files as the Python tool, so existing
-translations carry over, and its disc builds and `.bps` patches are byte-identical to the Python tool's.
+A project is a `<rom>.script.json` file next to the rom; translations can also be shared as CSV files.
 
 ## Run
 
@@ -20,7 +19,9 @@ into `dist/`.
 ## Layout
 
 - `Ps1tl.Core`: disc / ISO9660, FLB archives, sector EDC/ECC, patched-disc writer, BPS patches, fonts, the
-  Yuuyami game plugin (dialogue scene files + menu pictures), picture drawing, CSV translation files,
-  Claude client (CLI or API, streaming), jobs, and the project model.
+  game plugins (`Games.cs` picks one by serial): Yuuyami Doori Tankentai (dialogue scene files + menu pictures)
+  and Gunparade March (EVDATA.BIN event scripts, Shift-JIS text, half-width English font), picture drawing,
+  CSV translation files, Claude client (CLI or API, streaming), jobs, and the project model.
 - `Ps1tl.App`: the desktop editor.
-- `Ps1tl.Cli` (`ps1tl-cli`): `extract`, `insert`, `patch`, `apply`, `llm-test` for scripting and checks.
+- `Ps1tl.Cli` (`ps1tl-cli`): `extract`, `insert`, `patch`, `apply`, `llm-test` for scripting and checks, plus
+  reverse-engineering helpers (`files`, `dump`, `sjis-scan`, `evd-show`, `gpm-roundtrip`, `gpm-font`, ...).

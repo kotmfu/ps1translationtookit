@@ -65,6 +65,44 @@ public sealed class Font
         return (data, 0, rows.Max(r => r.Length) + 2);
     }
 
+    // --- two small lines in one row ---------------------------------------------------------------------
+    // A row too long for its text window is drawn as two lines of a small font inside the same 16px row:
+    // both lines go into one '#'-art strip, outlined as a whole, then cut into 16px-wide cells that each advance
+    // exactly 16, so the strip reassembles without seams (outlining per cell would draw dark lines through letters).
+    const int StackLine2 = 8;   // art row of the second line (line 1: rows 0-6, line 2: rows 8-14; strip top = cell row 1)
+
+    /// <summary>pixel width of one small line as drawn in the strip</summary>
+    public int LineWidth(string line) => line.Length == 0 ? 0 : Join(line)[0].Length;
+
+    /// <summary>cells the stacked strip of these two lines needs</summary>
+    public int StackCells(string l1, string l2) => (Math.Max(LineWidth(l1), LineWidth(l2)) + 2 + 15) / 16;
+
+    /// <summary>cell k of the strip (this font draws the lines; use the small font)</summary>
+    public (byte[] Bitmap, int X, int W) StackCell(string l1, string l2, int k)
+    {
+        int w = Math.Max(LineWidth(l1), LineWidth(l2)) + 2;
+        var px = new int[16, w];
+        for (int y = 0; y < 16; y++) for (int x = 0; x < w; x++) px[y, x] = Bg;
+        var ink = new List<(int y, int x)>();
+        foreach (var (line, y0) in new[] { (l1, 1), (l2, 1 + StackLine2) })
+        {
+            if (line.Length == 0) continue;
+            var art = Join(line);
+            for (int y = 0; y < art.Length; y++)
+                for (int x = 0; x < art[y].Length; x++)
+                    if (art[y][x] == '#' && y0 + y < 16) ink.Add((y0 + y, 1 + x));
+        }
+        foreach (var (y, x) in ink)
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                    if (y + dy is >= 0 and < 16 && x + dx >= 0 && x + dx < w && px[y + dy, x + dx] == Bg) px[y + dy, x + dx] = Edge;
+        foreach (var (y, x) in ink) px[y, x] = Core;
+        var data = new byte[128];
+        int P(int y, int x) => k * 16 + x < w ? px[y, k * 16 + x] : Bg;
+        for (int i = 0; i < 256; i += 2) data[i / 2] = (byte)(P(i / 16, i % 16) | P((i + 1) / 16, (i + 1) % 16) << 4);
+        return (data, 0, 16);
+    }
+
     /// <summary>'#'-art of several characters side by side, spaced exactly as separate glyphs would be</summary>
     public string[] Join(string text)
     {
