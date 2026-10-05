@@ -16,9 +16,10 @@ in the app. Requests run 4 at a time; the "Claude output (live)" panel shows eac
 Needs the .NET 10 SDK. `publish.bat` (Windows) or `./publish.sh` (Linux/macOS) builds both single-file apps
 into `dist/`.
 
-CI (`.github/workflows/build.yml`) builds both on every push and PR (download them from the run's artifacts).
-Pushing a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) also publishes a GitHub release with the
-Windows `.zip` and Linux `.tar.gz` attached, versioned from the tag.
+CI (`.github/workflows/build.yml`) builds both on every push to `main`, tags the commit with the next patch
+version (`v0.1.0`, `v0.1.1`, ...) and publishes a GitHub release with the Windows `.zip` and Linux `.tar.gz`
+attached. Push a tag like `v0.2.0` by hand to start a new version line. PRs only build (files are in the run's
+artifacts).
 
 ## Layout
 

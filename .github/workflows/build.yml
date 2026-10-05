@@ -1,24 +1,58 @@
 name: build
 
-# Every push and PR builds the single-file apps (same as native/publish.sh) and uploads them as workflow artifacts.
-# Pushing a tag like v1.2.0 also creates a GitHub release with both builds attached.
+# Every push to main builds the single-file apps (same as native/publish.sh), tags the commit with the next
+# patch version (v0.1.0, v0.1.1, ...) and publishes a GitHub release with both builds attached.
+# To start a new minor/major line, push a tag like v0.2.0 by hand; the next release continues from it.
+# PRs only build and upload the files as workflow artifacts.
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Next version
+        id: ver
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            v="0.0.0-pr.${{ github.event.number }}.${GITHUB_RUN_NUMBER}"
+          else
+            last=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+            if [ -z "$last" ]; then
+              v=0.1.0
+            else
+              IFS=. read -r major minor patch <<< "${last#v}"
+              v="$major.$minor.$((patch + 1))"
+            fi
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
   build:
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       matrix:
         rid: [win-x64, linux-x64]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,26 +60,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Version
-        id: ver
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
       - name: Publish
         working-directory: native
         run: >
           dotnet publish Ps1tl.App -c Release -r ${{ matrix.rid }} --self-contained
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none
-          -p:Version=${{ steps.ver.outputs.version }}
+          -p:Version=$VERSION
           -o out/${{ matrix.rid }}
 
       - name: Package
         working-directory: native/out/${{ matrix.rid }}
         run: |
           rm -f *.pdb
-          name=ps1tl-${{ steps.ver.outputs.version }}-${{ matrix.rid }}
+          name=ps1tl-$VERSION-${{ matrix.rid }}
           if [ "${{ matrix.rid }}" = win-x64 ]; then
             zip -9 "../$name.zip" *
           else
@@ -62,8 +89,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -73,9 +100,11 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create release
+      # creates the tag on this commit along with the release
+      - name: Create tag and release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
         run: >
-          gh release create "$GITHUB_REF_NAME" dist/*
-          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release create "$TAG" dist/*
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
