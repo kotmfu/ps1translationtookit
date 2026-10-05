@@ -111,9 +111,15 @@ x86/
 *.[Pp]ublish.xml
 roms/Yuuyami Doori Tankentai (Japan).bin
 roms/Yuuyami Doori Tankentai (Japan).cue
-roms/patched
 roms/diagnostic
 .claude
 .omc
 roms/Koukidou Gensou - Gunparade March (Japan).bin
 roms/Koukidou Gensou - Gunparade March (Japan).cue
+native/out/
+roms/patched/Koukidou Gensou - Gunparade March (Japan) (English).bin
+roms/patched/Koukidou Gensou - Gunparade March (Japan) (English).cue
+roms/patched/Yuuyami Doori Tankentai (Japan) (English packed).bin
+roms/patched/Yuuyami Doori Tankentai (Japan) (English packed).cue
+roms/patched/Yuuyami Doori Tankentai (Japan) (English).bin
+roms/patched/Yuuyami Doori Tankentai (Japan) (English).cue

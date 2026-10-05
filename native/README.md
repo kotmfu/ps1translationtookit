@@ -16,6 +16,10 @@ in the app. Requests run 4 at a time; the "Claude output (live)" panel shows eac
 Needs the .NET 10 SDK. `publish.bat` (Windows) or `./publish.sh` (Linux/macOS) builds both single-file apps
 into `dist/`.
 
+CI (`.github/workflows/build.yml`) builds both on every push and PR (download them from the run's artifacts).
+Pushing a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) also publishes a GitHub release with the
+Windows `.zip` and Linux `.tar.gz` attached, versioned from the tag.
+
 ## Layout
 
 - `Ps1tl.Core`: disc / ISO9660, FLB archives, sector EDC/ECC, patched-disc writer, BPS patches, fonts, the
