@@ -122,3 +122,7 @@ roms/patched/Yuuyami Doori Tankentai (Japan) (English packed).bin
 roms/patched/Yuuyami Doori Tankentai (Japan) (English packed).cue
 roms/patched/Yuuyami Doori Tankentai (Japan) (English).bin
 roms/patched/Yuuyami Doori Tankentai (Japan) (English).cue
+
+# recompiled game code (derived from the game disc: never commit)
+native/Ps1tl.Port/Generated/
+roms/*.mcd

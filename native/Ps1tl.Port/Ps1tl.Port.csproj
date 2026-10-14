@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ps1port</AssemblyName>
+    <RootNamespace>Ps1tl.Port</RootNamespace>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!-- generated functions are huge; skip tiered JIT warm-up so they get optimised code straight away -->
+    <TieredPGO>false</TieredPGO>
+    <NoWarn>CS0164;CS0162;CS0219;CS0168;CS8321</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ps1tl.Core\Ps1tl.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
+  </ItemGroup>
+
+</Project>
