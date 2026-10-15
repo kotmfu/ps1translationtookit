@@ -32,7 +32,10 @@ public sealed unsafe partial class Psx
     public readonly Mdec Mdec;
     public readonly Gte Gte = new();
     public readonly Bios Bios;
+    public readonly PsyQ Sdk;
+    public readonly Overlays Overlays;
 
+    public static bool DmaTrace;
     public uint IStat, IMask;
     public ushort Buttons = 0xFFFF;   // active low, set by the front end
     public int Frame;
@@ -48,6 +51,8 @@ public sealed unsafe partial class Psx
         Spu = new Spu(this);
         Mdec = new Mdec(this);
         Bios = new Bios(this);
+        Sdk = new PsyQ(this);
+        Overlays = new Overlays(this);
         nextVblank = FrameCycles;
         for (int i = 0; i < 3; i++) timers[i] = new Timer { Index = i };
         Reschedule();
@@ -98,20 +103,27 @@ public sealed unsafe partial class Psx
         else Write8Slow(p, v);
     }
 
+    /// <summary>--ioprof: (pc, register | 1 for a write) -> count, to find the library code behind each device</summary>
+    public Dictionary<(uint Pc, uint Reg), long>? IoProf;
+    void IoHit(uint p, bool w) { if (IoProf != null && p - 0x1F801000 < 0x2000) System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(IoProf, (Pc, p | (w ? 1u : 0)), out _)++; }
+
     uint Read32Slow(uint p)
     {
+        IoHit(p, false);
         if (p - 0x1F800000 < 0x400) return *(uint*)(scratch + (p & 0x3FC));
         if (p - 0x1F801000 < 0x2000) return Io32(p & ~3u);
         return 0;
     }
     uint Read16Slow(uint p)
     {
+        IoHit(p, false);
         if (p - 0x1F800000 < 0x400) return *(ushort*)(scratch + (p & 0x3FE));
         if (p - 0x1F801000 < 0x2000) return IoRead(p & ~1u, 2);
         return 0;
     }
     uint Read8Slow(uint p)
     {
+        IoHit(p, false);
         if (p - 0x1F800000 < 0x400) return scratch[p & 0x3FF];
         if (p - 0x1F801000 < 0x2000) return IoRead(p, 1);
         if (p - 0x1F000000 < 0x800000) return 0xFF;
@@ -119,18 +131,21 @@ public sealed unsafe partial class Psx
     }
     void Write32Slow(uint p, uint v)
     {
+        IoHit(p, true);
         if ((Sr & 0x10000) != 0) return;   // cache isolated: writes go to the (unemulated) i-cache
         if (p - 0x1F800000 < 0x400) *(uint*)(scratch + (p & 0x3FC)) = v;
         else if (p - 0x1F801000 < 0x2000) IoWrite(p & ~3u, v, 4);
     }
     void Write16Slow(uint p, uint v)
     {
+        IoHit(p, true);
         if ((Sr & 0x10000) != 0) return;
         if (p - 0x1F800000 < 0x400) *(ushort*)(scratch + (p & 0x3FE)) = (ushort)v;
         else if (p - 0x1F801000 < 0x2000) IoWrite(p & ~1u, v & 0xFFFF, 2);
     }
     void Write8Slow(uint p, uint v)
     {
+        IoHit(p, true);
         if ((Sr & 0x10000) != 0) return;
         if (p - 0x1F800000 < 0x400) scratch[p & 0x3FF] = (byte)v;
         else if (p - 0x1F801000 < 0x2000) IoWrite(p, v & 0xFF, 1);
@@ -160,6 +175,7 @@ public sealed unsafe partial class Psx
 
     uint IoRead(uint p, int size)
     {
+        if (Prof != null) System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(Prof, p | 1, out _)++;   // odd key: io read
         // upper halves of 32-bit DMA / timer registers
         if (size < 4 && p >= 0x1F801080 && p < 0x1F801130 && (p & 3) != 0) return IoRead(p & ~3u, 4) >> (int)((p & 3) * 8);
         switch (p)
@@ -275,7 +291,19 @@ public sealed unsafe partial class Psx
         if (IrqPending) NextEvent = Cycles;   // service at the next checkpoint
     }
 
-    public bool IrqPending => (IStat & IMask) != 0 && (Sr & 0x401) == 0x401;
+    public bool IrqPending => ((IStat & IMask) != 0 || Soft.Count > 0) && (Sr & 0x401) == 0x401;
+
+    /// <summary>
+    /// native SDK callbacks waiting for interrupt context (e.g. libcd's sync/ready callbacks): run like an
+    /// interrupt handler would, when the game has interrupts enabled, but without any hardware behind them
+    /// </summary>
+    public readonly Queue<Action> Soft = new();
+
+    public void Post(Action a)
+    {
+        Soft.Enqueue(a);
+        if (IrqPending) NextEvent = Cycles;
+    }
 
     // ---------------------------------------------------------------- scheduler
 
@@ -287,6 +315,17 @@ public sealed unsafe partial class Psx
     {
         timed.Add((Cycles + delay, act));
         if (Cycles + delay < NextEvent) NextEvent = Cycles + delay;
+    }
+
+    /// <summary>let time pass up to the next vblank, running everything due on the way (a native frame wait)</summary>
+    public void RunToVBlank()
+    {
+        int f = Frame;
+        while (Frame == f)
+        {
+            Cycles = Math.Max(Cycles, Math.Min(NextEvent, nextVblank));
+            Tick();
+        }
     }
 
     void Reschedule()
@@ -310,6 +349,7 @@ public sealed unsafe partial class Psx
             Gpu.VBlank();
             Irq(0);
             Spu.Frame();
+            Bios.Card?.Tick();
             OnVBlank?.Invoke();
         }
         for (int i = 0; i < timed.Count; i++)
@@ -322,7 +362,7 @@ public sealed unsafe partial class Psx
         foreach (var t in timers) if (t.NextIrq <= Cycles) { UpdateTimer(t); ScheduleTimer(t); }
         // one interrupt per checkpoint: an irq nobody acknowledges must not stall the game
         bool take = IrqPending && !Bios.InException;
-        if (take) Bios.Interrupt();
+        if (take) { if ((IStat & IMask) != 0) Bios.Interrupt(); else Bios.RunSoft(Soft.Dequeue()); }
         Reschedule();
         if (take && IrqPending || Bios.InException) NextEvent = Math.Max(NextEvent, Cycles + 64);
     }
@@ -387,6 +427,8 @@ public sealed unsafe partial class Psx
         }
         else
         {
+            if (n == 3) Overlays.Loaded(addr, (uint)words * 4);
+            if (DmaTrace && n == 3) Log($"cd dma -> {addr | 0x80000000:X8} {words * 4} bytes, lba {Cd.LastLba} f{Frame}");
             for (int i = 0; i < words; i++)
             {
                 if (toRam)

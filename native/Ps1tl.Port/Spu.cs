@@ -4,7 +4,7 @@ namespace Ps1tl.Port;
 
 /// <summary>
 /// The sound chip: 512 KB of sound RAM, 24 ADPCM voices with ADSR envelopes, CD (XA) audio input, mixed to
-/// 44.1 kHz stereo. No reverb. Output goes to <see cref="AudioOut"/>.
+/// 44.1 kHz stereo, plus the reverb unit. Output goes to <see cref="AudioOut"/>.
 /// </summary>
 public sealed class Spu(Psx m)
 {
@@ -119,7 +119,7 @@ public sealed class Spu(Psx m)
     }
 
     public long KeyOns, CdSamples;
-    public string Debug => $"spu cnt={cnt:X4} main={regs[0xC0]:X4}/{regs[0xC1]:X4} cdvol={regs[0xD8]:X4} keyons={KeyOns} cd={CdSamples} active={voices.Count(v => v.Ph != Phase.Off)}";
+    public string Debug => $"spu cnt={cnt:X4} main={regs[0xC0]:X4}/{regs[0xC1]:X4} cdvol={regs[0xD8]:X4} keyons={KeyOns} cd={CdSamples} rev={regs[0xD1]:X4}/{regs[0xC2]:X4}/{regs[0xCC] | regs[0xCD] << 16:X6} active={voices.Count(v => v.Ph != Phase.Off)}";
 
     void KeyOn(uint bits)
     {
@@ -208,7 +208,8 @@ public sealed class Spu(Psx m)
 
     (int L, int R) Sample()
     {
-        int l = 0, r = 0;
+        int l = 0, r = 0, rl = 0, rr = 0;
+        uint eon = regs[0xCC] | (uint)regs[0xCD] << 16;
         for (int i = 0; i < 24; i++)
         {
             var v = voices[i];
@@ -236,19 +237,84 @@ public sealed class Spu(Psx m)
             if ((v.Counter >> 12) > 0) v.Prev1 = v.Buf[(v.Counter >> 12) - 1];
             Envelope(v);
             s = s * v.Level >> 15;
-            l += s * Vol(v.VolL) >> 15;
-            r += s * Vol(v.VolR) >> 15;
+            int vl = s * Vol(v.VolL) >> 15, vr = s * Vol(v.VolR) >> 15;
+            l += vl; r += vr;
+            if ((eon & 1u << i) != 0) { rl += vl; rr += vr; }
         }
-        int mainL = Vol(regs[0xC0]), mainR = Vol(regs[0xC1]);
-        l = l * mainL >> 15; r = r * mainR >> 15;
+        if ((cnt & 0x4000) == 0) l = r = 0;   // muted
         if (cd.Count > 0)
         {
             var (cl, cr) = cd.Dequeue();
             int cvl = regs[0xD8] == 0 ? 0x7FFF : (short)regs[0xD8], cvr = regs[0xD9] == 0 ? 0x7FFF : (short)regs[0xD9];
-            if ((cnt & 1) != 0) { l += cl * cvl >> 15; r += cr * cvr >> 15; }
+            if ((cnt & 1) != 0)
+            {
+                cl = (short)(cl * cvl >> 15); cr = (short)(cr * cvr >> 15);
+                l += cl; r += cr;
+                if ((cnt & 4) != 0) { rl += cl; rr += cr; }
+            }
         }
-        if ((cnt & 0x8000) == 0 || (cnt & 0x4000) == 0) return (0, 0);
-        return (Math.Clamp(l, -32768, 32767), Math.Clamp(r, -32768, 32767));
+        // the reverb unit runs at 22.05 kHz: hold its output for two samples
+        if (revOdd ^= true) (revOutL, revOutR) = Reverb(Clamp16(rl), Clamp16(rr));
+        l += revOutL; r += revOutR;
+        if ((cnt & 0x8000) == 0) return (0, 0);
+        return (Clamp16(Clamp16(l) * Vol(regs[0xC0]) >> 15), Clamp16(Clamp16(r) * Vol(regs[0xC1]) >> 15));
+    }
+
+    static int Clamp16(int x) => Math.Clamp(x, -32768, 32767);
+
+    // ---------------------------------------------------------------- reverb (psx-spx algorithm)
+
+    uint revAddr;
+    bool revOdd;
+    int revOutL, revOutR;
+
+    /// <summary>reverb register i (1F801DC0 + 2i) as a signed volume, or as a byte offset into the work area</summary>
+    int RV(int i) => (short)regs[0xE0 + i];
+    int RM(int i) => regs[0xE0 + i] * 8;
+
+    uint RevAddr(int off)
+    {
+        uint b = (uint)regs[0xD1] * 8, size = 0x80000 - b;
+        long rel = ((long)revAddr - b + off) % size;
+        return (uint)(b + (rel < 0 ? rel + size : rel)) & 0x7FFFE;
+    }
+    int RR(int off) { uint a = RevAddr(off); return (short)(Ram[a] | Ram[a + 1] << 8); }
+    void RW(int off, int v)
+    {
+        if ((cnt & 0x80) == 0) return;   // reverb writes disabled
+        v = Clamp16(v);
+        uint a = RevAddr(off); Ram[a] = (byte)v; Ram[a + 1] = (byte)(v >> 8);
+    }
+    static int Mul(int a, int b) => a * b >> 15;
+
+    (int, int) Reverb(int lin, int rin)
+    {
+        if (regs[0xD1] == 0) return (0, 0);
+        lin = Mul(lin, RV(30)); rin = Mul(rin, RV(31));
+        int wall = RV(7), iir = RV(2);
+        // same side and cross reflections
+        int ls = RR(RM(10) - 2), rs = RR(RM(11) - 2), ld = RR(RM(18) - 2), rd = RR(RM(19) - 2);
+        RW(RM(10), Mul(lin + Mul(RR(RM(16)), wall) - ls, iir) + ls);
+        RW(RM(11), Mul(rin + Mul(RR(RM(17)), wall) - rs, iir) + rs);
+        RW(RM(18), Mul(lin + Mul(RR(RM(25)), wall) - ld, iir) + ld);
+        RW(RM(19), Mul(rin + Mul(RR(RM(24)), wall) - rd, iir) + rd);
+        // early echo (comb filters)
+        int lo = Clamp16(Mul(RV(3), RR(RM(12))) + Mul(RV(4), RR(RM(14))) + Mul(RV(5), RR(RM(20))) + Mul(RV(6), RR(RM(22))));
+        int ro = Clamp16(Mul(RV(3), RR(RM(13))) + Mul(RV(4), RR(RM(15))) + Mul(RV(5), RR(RM(21))) + Mul(RV(6), RR(RM(23))));
+        // late reverb: two all-pass filters
+        lo = Apf(lo, 26, 0, 8); ro = Apf(ro, 27, 0, 8);
+        lo = Apf(lo, 28, 1, 9); ro = Apf(ro, 29, 1, 9);
+        uint b = (uint)regs[0xD1] * 8;
+        revAddr = Math.Max(b, (revAddr + 2) & 0x7FFFE);
+        return (Mul(lo, (short)regs[0xC2]), Mul(ro, (short)regs[0xC3]));
+    }
+
+    int Apf(int x, int m, int d, int v)
+    {
+        int t = RR(RM(m) - RM(d));
+        x = Clamp16(x - Mul(RV(v), t));
+        RW(RM(m), x);
+        return Clamp16(Mul(x, RV(v)) + t);
     }
 
     readonly short[] mix = new short[4096];
@@ -327,7 +393,7 @@ public sealed class Xa
     }
 }
 
-/// <summary>44.1 kHz stereo output through winmm (Windows); silent elsewhere</summary>
+/// <summary>44.1 kHz stereo output: winmm on Windows, elsewhere piped to the first of pw-cat / pacat / aplay found</summary>
 public sealed class AudioOut : IDisposable
 {
     [StructLayout(LayoutKind.Sequential)]
@@ -349,9 +415,42 @@ public sealed class AudioOut : IDisposable
     int accN, next;
     readonly bool ok;
 
+    // non-Windows: raw PCM into a player process, fed from a bounded queue so a slow pipe never stalls emulation
+    System.Diagnostics.Process? player;
+    System.Collections.Concurrent.BlockingCollection<byte[]>? queue;
+
+    static readonly (string Exe, string Args)[] Players =
+    [
+        ("pw-cat", "--playback --format s16 --rate 44100 --channels 2 -"),
+        ("pacat", "--playback --format=s16le --rate=44100 --channels=2"),
+        ("aplay", "-q -f S16_LE -c 2 -r 44100"),
+    ];
+
+    void StartPlayer()
+    {
+        foreach (var (exe, args) in Players)
+        {
+            try
+            {
+                player = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, args) { RedirectStandardInput = true, UseShellExecute = false });
+            }
+            catch (System.ComponentModel.Win32Exception) { continue; }   // not installed
+            if (player == null) continue;
+            queue = new(Bufs);
+            var q = queue; var stdin = player.StandardInput.BaseStream;
+            new Thread(() =>
+            {
+                try { foreach (var b in q.GetConsumingEnumerable()) stdin.Write(b); }
+                catch (IOException) { }   // player went away: stay silent
+            }) { IsBackground = true, Name = "audio" }.Start();
+            return;
+        }
+        Psx.Log("no audio: install pipewire (pw-cat), pulseaudio-utils (pacat) or alsa-utils (aplay)");
+    }
+
     public AudioOut()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) { StartPlayer(); return; }
         var f = new WaveFormat { Tag = 1, Channels = 2, Rate = 44100, Bits = 16, Align = 4, BytesPerSec = 44100 * 4 };
         if (waveOutOpen(out h, -1, ref f, 0, 0, 0) != 0) return;
         int hs = Marshal.SizeOf<WaveHdr>();
@@ -366,6 +465,7 @@ public sealed class AudioOut : IDisposable
 
     public void Write(ReadOnlySpan<short> s)
     {
+        if (queue != null) { queue.TryAdd(MemoryMarshal.AsBytes(s).ToArray()); return; }   // full: drop
         if (!ok) return;
         int hs = Marshal.SizeOf<WaveHdr>();
         foreach (var x in s)
@@ -386,5 +486,10 @@ public sealed class AudioOut : IDisposable
         }
     }
 
-    public void Dispose() { if (ok) waveOutClose(h); }
+    public void Dispose()
+    {
+        if (ok) waveOutClose(h);
+        queue?.CompleteAdding();
+        try { player?.Kill(); } catch (InvalidOperationException) { }
+    }
 }

@@ -25,6 +25,7 @@ public static class Boot
         uint U(int o) => BitConverter.ToUInt32(exe, o);
         Entry = U(0x10);
         uint gp = U(0x14), dst = U(0x18), size = U(0x1C), sp = U(0x30);
+        m.Overlays.ExeStart = dst; m.Overlays.ExeEnd = dst + size;
         exe.AsSpan(0x800, (int)Math.Min(size, exe.Length - 0x800)).CopyTo(m.RamSpan(dst, (int)size));
         // BIOS function tables live in kernel RAM; games locate them via B0:57 / C0 tables but only patch them
         m.Bios.InitKernel();
@@ -50,6 +51,7 @@ public static class Boot
         File.WriteAllLines("entries.txt", known.Order());
         Psx.Log($"funcs {m.Funcs.Count}, frames {m.Frame}, cycles {m.Cycles}, interpreted {m.Interpreted} instructions, pc-starts {m.InterpHits.Count}");
         foreach (var (a, n) in m.InterpHits.OrderByDescending(kv => kv.Value).Take(20)) Psx.Log($"  interp entry {a:X8} x{n}");
+        if (m.Prof != null) foreach (var (a, n) in m.Prof.OrderBy(kv => kv.Key)) Psx.Log($"  prof {a:X8} x{n}");
         Psx.Log("gp0: " + string.Join(' ', Enumerable.Range(0, 256).Where(i => m.Gpu.Counts[i] > 0).Select(i => $"{i:X2}x{m.Gpu.Counts[i]}")) + " " + m.Gpu.Areas);
         Psx.Log(m.Spu.Debug);
         Psx.Log($"display {m.Gpu.HRes}x{m.Gpu.VRes} at {m.Gpu.DispX},{m.Gpu.DispY} off={m.Gpu.DisplayOff} 24bit={m.Gpu.Rgb24}");

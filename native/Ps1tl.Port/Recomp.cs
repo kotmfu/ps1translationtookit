@@ -262,7 +262,7 @@ public static class Recomp
 
     static string Name(uint a) => $"F_{a:X8}";
 
-    sealed class Emitter(Image img, Func f, HashSet<uint> compiled)
+    sealed class Emitter(Image img, Func f, Dictionary<uint, string> direct, string? selfName = null)
     {
         readonly StringBuilder sb = new();
         int pending;   // instructions since the last cycle flush
@@ -270,19 +270,19 @@ public static class Recomp
         void Line(string s) { if (s.Length > 0) sb.Append("        ").AppendLine(s); }
         void Flush() { if (pending > 0) { Line($"m.Cycles += {pending * 2};"); pending = 0; } }
 
-        string Call(uint t) => compiled.Contains(t) ? $"{Name(t)}(m);" : $"m.Call({Hex(t)});";
+        string Call(uint t) => direct.TryGetValue(t, out var n) ? $"{n}(m);" : $"m.Call({Hex(t)});";
 
         /// <summary>jump to t: inside the function = goto, otherwise a tail call</summary>
         string Goto(uint t, uint from)
         {
             if (f.Body.Contains(t) && f.Labels.Contains(t))
                 return t <= from ? $"{{ if (m.Cycles >= m.NextEvent) m.Tick(); goto L_{t:X8}; }}" : $"goto L_{t:X8};";
-            return compiled.Contains(t) ? $"{{ {Name(t)}(m); return; }}" : $"{{ m.Jump({Hex(t)}, ra0, sp0); return; }}";
+            return direct.TryGetValue(t, out var n) ? $"{{ {n}(m); return; }}" : $"{{ m.Jump({Hex(t)}, ra0, sp0); return; }}";
         }
 
         public string Emit()
         {
-            sb.AppendLine($"    public static void {Name(f.Entry)}(Psx m)");
+            sb.AppendLine($"    public static void {selfName ?? direct.GetValueOrDefault(f.Entry, Name(f.Entry))}(Psx m)");
             sb.AppendLine("    {");
             Line("var r = m.R;");
             Line("bool bc; uint bt;");
@@ -392,32 +392,148 @@ public static class Recomp
         }
     }
 
-    /// <summary>recompile the boot EXE into C# files in outDir; returns the number of functions</summary>
-    public static int Run(byte[] exe, string outDir, IEnumerable<uint> extraEntries)
+    /// <summary>
+    /// --map: one line per function (linear extent up to the next entry) with the hardware registers it touches,
+    /// BIOS calls, strings it references, callees and callers. The PsyQ libraries show up as the I/O leaves.
+    /// </summary>
+    public static void Map(byte[] exe, string path, IEnumerable<uint> extra)
     {
         var img = Load(exe);
+        var entries = FindEntries(img, BitConverter.ToUInt32(exe, 0x10), extra).OrderBy(e => e).ToList();
+        var callers = new Dictionary<uint, List<uint>>();
+        var lines = new List<string>();
+        var info = new Dictionary<uint, (SortedSet<uint> Io, SortedSet<string> Bios, SortedSet<string> Str, SortedSet<uint> Calls)>();
+        for (int k = 0; k < entries.Count; k++)
+        {
+            uint e = entries[k], end = k + 1 < entries.Count ? entries[k + 1] : img.End;
+            var io = new SortedSet<uint>(); var bios = new SortedSet<string>(); var str = new SortedSet<string>(); var calls = new SortedSet<uint>();
+            var hi = new uint?[32];
+            int t1 = -1;
+            for (uint a = e; a < end; a += 4)
+            {
+                uint i = img.At(a);
+                if (Op(i) == 15) { hi[Rt(i)] = (i & 0xFFFF) << 16; continue; }
+                if (Op(i) == 3) { uint t = JumpTarget(i, a); calls.Add(t); if (!callers.TryGetValue(t, out var l)) callers[t] = l = new(); l.Add(e); }
+                if (Op(i) == 9 && Rs(i) == 0 && Rt(i) == 9) t1 = (int)(i & 0xFFFF);
+                if (Op(i) == 9 && Rs(i) == 0 && Rt(i) == 10 && (i & 0xFFFF) is 0xA0 or 0xB0 or 0xC0) bios.Add($"{i & 0xFF:X2}");
+                if ((Op(i) is 9 or 13 or (>= 32 and <= 46)) && hi[Rs(i)] is { } h)
+                {
+                    uint addr = Op(i) == 13 ? h | (i & 0xFFFF) : h + (uint)(short)i;
+                    if ((addr & 0xFFFFF000) == 0x1F801000) io.Add(addr);
+                    else if (img.In(addr) || (addr >= img.Base && addr < img.End + 0x100000))
+                    {
+                        if (img.In(addr & ~3u))
+                        {
+                            var sb = new StringBuilder();
+                            for (uint q = addr; q < Math.Min(img.End, addr + 40); q++)
+                            {
+                                byte c = (byte)(img.At(q & ~3u) >> (int)((q & 3) * 8));
+                                if (c == 0) break;
+                                if (c < 32 || c > 126) { sb.Clear(); break; }
+                                sb.Append((char)c);
+                            }
+                            if (sb.Length >= 4) str.Add(sb.ToString());
+                        }
+                    }
+                }
+                if (Op(i) == 9 && Rt(i) != Rs(i)) hi[Rt(i)] = null;
+            }
+            if (bios.Count > 0 && t1 >= 0) { var b = bios.First(); bios.Clear(); bios.Add($"{b}:{t1:X2}"); }
+            info[e] = (io, bios, str, calls);
+        }
+        foreach (var e in entries)
+        {
+            var (io, bios, str, calls) = info[e];
+            var sb = new StringBuilder($"{e:X8}");
+            if (io.Count > 0) sb.Append(" io[" + string.Join(' ', io.Select(x => (x & 0xFFF).ToString("X3"))) + "]");
+            if (bios.Count > 0) sb.Append(" bios[" + string.Join(' ', bios) + "]");
+            if (str.Count > 0) sb.Append(" str[" + string.Join(" | ", str.Take(3)) + "]");
+            sb.Append($" calls[{calls.Count}] callers[{(callers.TryGetValue(e, out var c) ? c.Count : 0)}]");
+            lines.Add(sb.ToString());
+        }
+        File.WriteAllLines(path, lines);
+    }
+
+    /// <summary>
+    /// Recompile the boot EXE, and every overlay saved in overlayDir ("&lt;load address&gt;_&lt;crc&gt;.bin"), into C# files
+    /// in outDir; returns the number of functions.
+    /// </summary>
+    public static int Run(byte[] exe, string outDir, IEnumerable<uint> extraEntries, string? overlayDir = null)
+    {
+        var extra = extraEntries.ToList();
+        var img = Load(exe);
+        // profile entries where a disc-loaded module put different code belong to that module, not the EXE
+        var dumps = overlayDir != null && Directory.Exists(overlayDir)
+            ? Directory.GetFiles(overlayDir, "*.bin").Order().Select(p => (Start: Convert.ToUInt32(Path.GetFileNameWithoutExtension(p).Split('_')[0], 16), Bytes: File.ReadAllBytes(p))).ToList()
+            : [];
+        bool Overwritten(uint a) => dumps.Any(d => a >= d.Start && a + 4 <= d.Start + (uint)d.Bytes.Length && BitConverter.ToUInt32(d.Bytes, (int)(a - d.Start)) != img.At(a));
+        var exeExtra = extra.Where(a => img.In(a) && !Overwritten(a)).ToList();
+        // EXE functions that only overlays call
+        foreach (var (start, bytes) in dumps)
+            for (int o = 0; o + 4 <= bytes.Length; o += 4)
+            {
+                uint i = BitConverter.ToUInt32(bytes, o), t = JumpTarget(i, start + (uint)o);
+                if (Op(i) == 3 && img.In(t) && !Overwritten(t) && Valid(img.At(t))) exeExtra.Add(t);
+            }
         uint entry = BitConverter.ToUInt32(exe, 0x10);
-        var entries = FindEntries(img, entry, extraEntries);
+        var entries = FindEntries(img, entry, exeExtra);
         var funcs = entries.OrderBy(e => e).Select(e => Discover(img, e, entries)).Where(f => f.Body.Count > 0).ToList();
-        var compiled = funcs.Select(f => f.Entry).ToHashSet();
+        // SDK functions are called through the dispatch table so their native versions (PsyQ.cs) take over
+        var sdk = Symbols.ByExe.TryGetValue(Ps1tl.Crc32.Of(exe), out var syms) ? syms.Values.ToHashSet() : [];
+        var exeDirect = funcs.Where(f => !sdk.Contains(f.Entry)).ToDictionary(f => f.Entry, f => Name(f.Entry));
         Directory.CreateDirectory(outDir);
         foreach (var old in Directory.GetFiles(outDir, "*.g.cs")) File.Delete(old);
-        const int PerFile = 40;
-        for (int k = 0; k * PerFile < funcs.Count; k++)
+        int file = 0, total = funcs.Count;
+        void Write(Image im, List<Func> fs, Dictionary<uint, string> direct, Func<Func, string>? nameOf = null)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("// <auto-generated> recompiled game code: do not edit, do not distribute </auto-generated>");
-            sb.AppendLine("namespace Ps1tl.Port;");
-            sb.AppendLine("static partial class Recompiled");
-            sb.AppendLine("{");
-            foreach (var f in funcs.Skip(k * PerFile).Take(PerFile))
+            const int PerFile = 40;
+            for (int k = 0; k * PerFile < fs.Count; k++)
             {
-                if (f.Truncated) Psx.Log($"recomp: {f.Entry:X8} truncated");
-                sb.Append(new Emitter(img, f, compiled).Emit());
+                var sb = new StringBuilder();
+                sb.AppendLine("// <auto-generated> recompiled game code: do not edit, do not distribute </auto-generated>");
+                sb.AppendLine("namespace Ps1tl.Port;");
+                sb.AppendLine("static partial class Recompiled");
+                sb.AppendLine("{");
+                foreach (var f in fs.Skip(k * PerFile).Take(PerFile))
+                {
+                    if (f.Truncated) Psx.Log($"recomp: {f.Entry:X8} truncated");
+                    sb.Append(new Emitter(im, f, direct, nameOf?.Invoke(f)).Emit());
+                }
+                sb.AppendLine("}");
+                File.WriteAllText(Path.Combine(outDir, $"Game{file++:D3}.g.cs"), sb.ToString());
             }
-            sb.AppendLine("}");
-            File.WriteAllText(Path.Combine(outDir, $"Game{k:D3}.g.cs"), sb.ToString());
         }
+        // the executable's SDK functions still get compiled (the fallback with --emulate-sdk), just never called directly
+        Write(img, funcs, exeDirect);
+
+        // overlay functions: each identified by the CRC of the code it covers; calls between them go through the
+        // dispatcher so every callee is checked against what is in RAM
+        var ovl = new List<(uint Addr, uint Lo, uint Hi, uint Crc, string Name)>();
+        var seen = new HashSet<(uint, uint)>();
+        foreach (var (start, bytes) in dumps)
+        {
+            var oi = new Image { Base = start, End = start + (uint)(bytes.Length & ~3), Words = new uint[bytes.Length / 4] };
+            Buffer.BlockCopy(bytes, 0, oi.Words, 0, bytes.Length & ~3);
+            var known = extra.Where(oi.In).ToList();
+            var oe = FindEntries(oi, known.Count > 0 ? known[0] : start, known);
+            oe.RemoveWhere(e => !oi.In(e) || !Valid(oi.At(e)) || (img.In(e) && img.At(e) == oi.At(e)));   // unchanged EXE code is the EXE's
+            var ofs = new List<Func>();
+            var names = new Dictionary<Func, string>();
+            foreach (var f in oe.Order().Select(e => Discover(oi, e, oe)).Where(f => f.Body.Count > 0))
+            {
+                uint lo = f.Body.Min(), hi = f.Body.Max() + 4;
+                uint crc = Ps1tl.Crc32.Of(bytes.AsSpan((int)(lo - start), (int)(hi - lo)));
+                if (!seen.Add((f.Entry, crc))) continue;   // the same code saved from another load
+                names[f] = $"O{crc:X8}_{Name(f.Entry)}";
+                ofs.Add(f);
+                ovl.Add((f.Entry, lo, hi, crc, names[f]));
+            }
+            if (ofs.Count == 0) continue;
+            Write(oi, ofs, exeDirect, f => names[f]);
+            total += ofs.Count;
+            Psx.Log($"recomp: overlay load {start:X8}: {ofs.Count} new functions");
+        }
+
         var reg = new StringBuilder();
         reg.AppendLine("// <auto-generated/>");
         reg.AppendLine("namespace Ps1tl.Port;");
@@ -428,11 +544,13 @@ public static class Recomp
         reg.AppendLine("    static partial void RegisterAll(Psx m)");
         reg.AppendLine("    {");
         foreach (var f in funcs) reg.AppendLine($"        m.Funcs[0x{f.Entry:X8}] = {Name(f.Entry)};");
+        foreach (var (addr, lo, hi, crc, name) in ovl)
+            reg.AppendLine($"        m.Overlays.Add(0x{addr:X8}, 0x{lo:X8}, 0x{hi:X8}, 0x{crc:X8}, {name});");
         reg.AppendLine("    }");
         reg.AppendLine("}");
         File.WriteAllText(Path.Combine(outDir, "Register.g.cs"), reg.ToString());
-        Psx.Log($"recomp: {funcs.Count} functions, {funcs.Sum(f => f.Body.Count)} instructions emitted");
-        return funcs.Count;
+        Psx.Log($"recomp: {total} functions ({ovl.Count} in overlays)");
+        return total;
     }
 }
 
@@ -443,12 +561,13 @@ static partial class Recompiled
     static partial void Crc(ref uint crc);
 
     /// <summary>plug in the recompiled functions if they were made from this exact executable</summary>
-    public static bool Register(Psx m, byte[] exe)
+    public static bool Register(Psx m, byte[] exe, bool overlays = true)
     {
         uint want = 0;
         Crc(ref want);
         if (want == 0 || want != Ps1tl.Crc32.Of(exe)) return false;
         RegisterAll(m);
+        if (!overlays) m.Overlays.Clear();
         return true;
     }
 }

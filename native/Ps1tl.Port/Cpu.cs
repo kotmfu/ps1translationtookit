@@ -15,11 +15,16 @@ public sealed unsafe partial class Psx
     /// <summary>last interpreted pc (diagnostics)</summary>
     public uint Pc;
     public readonly Dictionary<uint, long> InterpHits = new();
+    /// <summary>--prof: interpreted instructions per pc (diagnostics)</summary>
+    public Dictionary<uint, long>? Prof;
+    /// <summary>--trap: log the registers whenever the interpreter executes this pc (diagnostics)</summary>
+    public uint TrapPc = 1;
 
     /// <summary>call the function at addr; returns when it returns (R[31] is the caller's return address)</summary>
     public void Call(uint addr)
     {
         if (Cycles >= NextEvent) Tick();
+        if (!Funcs.ContainsKey(addr)) Overlays.Touch(addr);
         if (Funcs.TryGetValue(addr, out var f)) { f(this); return; }
         if (Bios.Hle(addr)) return;
         Interpret(addr, R[31], R[29]);
@@ -28,6 +33,7 @@ public sealed unsafe partial class Psx
     /// <summary>a jump (not a call) out of recompiled code: continue at addr until the current function returns</summary>
     public void Jump(uint addr, uint ra0, uint sp0)
     {
+        if (!Funcs.ContainsKey(addr)) Overlays.Touch(addr);
         if (Funcs.TryGetValue(addr, out var f)) { f(this); return; }
         if (Bios.Hle(addr)) return;
         Interpret(addr, ra0, sp0);
@@ -49,6 +55,7 @@ public sealed unsafe partial class Psx
                 jumped = false;
                 if (pc == stopRa && R[29] == stopSp) return;
                 if (Cycles >= NextEvent) Tick();
+                if (!Funcs.ContainsKey(pc)) Overlays.Touch(pc);
                 if (Funcs.TryGetValue(pc, out var f) || Bios.IsVector(pc))
                 {
                     // a call (or tail call) into native code: it returns to R[31]
@@ -60,6 +67,8 @@ public sealed unsafe partial class Psx
             uint ins = Read32(pc);
             uint cur = pc;
             Pc = cur;
+            if (cur == TrapPc) Log($"trap {cur:X8} f{Frame} " + string.Join(' ', Enumerable.Range(1, 31).Select(i => $"r{i}={R[i]:X8}")));
+            if (Prof != null) System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(Prof, cur, out _)++;
             pc = next; next = pc + 4;
             bool wasDelay = inDelay;
             inDelay = false;

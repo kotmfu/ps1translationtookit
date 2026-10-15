@@ -16,6 +16,12 @@ public sealed class Bios(Psx m)
     // interrupt handler chain (SysEnqIntRP), by priority
     readonly List<uint>[] chain = [new(), new(), new(), new()];
     uint customExit;       // SetCustomExitFromException jmp_buf
+
+    /// <summary>
+    /// the stack interrupt-time code runs on: the game's own exception handler stack (from its custom exit
+    /// jmp_buf, as libapi sets it up) or else the BIOS one
+    /// </summary>
+    public uint IrqStack => customExit != 0 ? m.Read32(customExit + 4) : 0x801FFF00 - 0x400;
     readonly uint[] saved = new uint[32];
     uint savedHi, savedLo;
 
@@ -295,12 +301,49 @@ public sealed class Bios(Psx m)
         return 1;
     }
 
+    /// <summary>
+    /// run a guest callback from native SDK code (libcd's sync/ready callbacks, DrawSyncCallback, ...): unlike a
+    /// BIOS call it hands nothing back, so every register of the code it interrupted is left as it was, v0 too
+    /// </summary>
+    public void Callback(uint func, uint a0 = 0, uint a1 = 0)
+    {
+        uint v0 = m.R[2];
+        CallGuest(func, a0, a1);
+        m.R[2] = v0;
+    }
+
+    /// <summary>
+    /// a callback at interrupt time (from the soft interrupt queue): on the stack the game's interrupt handlers
+    /// use, as Sony's handlers run them. `arg` bytes go at the top of that stack and a1 points at them. A callback
+    /// from code already on that stack goes below its frame.
+    /// </summary>
+    public void IrqCallback(uint func, uint a0 = 0, byte[]? arg = null)
+    {
+        uint top = IrqStack, sp = m.R[29];
+        bool onIrqStack = sp <= top && sp > top - 0x2000;
+        uint buf = ((onIrqStack ? sp : top) - 0x20) & ~7u;
+        if (arg != null) for (int i = 0; i < arg.Length; i++) m.Write8(buf + (uint)i, arg[i]);
+        m.R[29] = buf - 8;
+        Callback(func, a0, arg != null ? buf : 0);
+        m.R[29] = sp;
+    }
+
+    /// <summary>run a native callback in interrupt context (no other interrupt or callback can cut in)</summary>
+    public void RunSoft(Action a)
+    {
+        bool was = InException;
+        InException = true;
+        try { a(); }
+        finally { InException = was; }
+    }
+
     /// <summary>call a guest function from BIOS code, preserving the caller's registers</summary>
-    void CallGuest(uint func, uint a0 = 0)
+    void CallGuest(uint func, uint a0 = 0, uint a1 = 0)
     {
         var keep = (uint[])m.R.Clone();
         uint hi = m.Hi, lo = m.Lo;
         m.R[4] = a0;
+        m.R[5] = a1;
         m.R[31] = Sentinel;
         if (m.R[29] == 0) m.R[29] = 0x801FFF00;
         m.R[29] -= 0x40;

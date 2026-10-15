@@ -157,7 +157,7 @@ public sealed class Gpu(Psx m)
     {
         uint c = cmd[0] >> 24;
         Counts[c]++;
-        if (Trace && (c is 0x2C or 0x80 or 0x60 or 0x02)) Psx.Log($"gp0 {string.Join(' ', cmd.Take(cmdNeed == 0 ? 1 : cmdNeed).Select(w => w.ToString("X8")))} f{m.Frame}");
+        if (Trace) Psx.Log($"gp0 {string.Join(' ', cmd.Take(cmdNeed == 0 ? 1 : cmdNeed).Select(w => w.ToString("X8")))} f{m.Frame}");
         switch (c >> 5)
         {
             case 1: Polygon(c); return;

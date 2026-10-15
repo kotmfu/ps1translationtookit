@@ -33,6 +33,25 @@ public sealed class Cdrom(Psx m, Ps1tl.Disc disc)
 
     public readonly Xa Xa = new();
     public static bool Trace;
+    public int LastLba;
+    public Ps1tl.Disc Disc => disc;
+
+    /// <summary>
+    /// native libcd (PsyQ.Cd.cs): when set, the drive's interrupts go here with their response bytes (and, for
+    /// data ready, a copy of the sector) instead of through the registers and IRQ 2
+    /// </summary>
+    public Action<byte, byte[], byte[]?>? Sink;
+
+    /// <summary>native libcd: issue a command with its parameter bytes</summary>
+    public void Send(byte cmd, ReadOnlySpan<byte> p)
+    {
+        param.Clear();
+        foreach (var b in p) param.Enqueue(b);
+        Command(cmd);
+    }
+
+    /// <summary>native libcd: set the read position without a Setloc command (libcd's implicit Setloc)</summary>
+    public void Seek(int lba) { setLoc = lba; setLocPending = true; }
 
     public uint Read(uint reg)
     {
@@ -82,6 +101,7 @@ public sealed class Cdrom(Psx m, Ps1tl.Disc disc)
     /// <summary>queue an interrupt with its response; delivered once the game has acknowledged the previous one</summary>
     void Int(byte type, params byte[] r)
     {
+        if (Sink != null) { busy = false; Sink(type, r, type == 1 ? sectorBuf.AsSpan(0, sectorLen).ToArray() : null); return; }
         pending.Enqueue((type, r));
         if (iflag == 0) Deliver();
     }
@@ -206,6 +226,7 @@ public sealed class Cdrom(Psx m, Ps1tl.Disc disc)
     void ReadSector()
     {
         int lba = readLoc++;
+        LastLba = lba;
         if (lba < 0 || lba >= disc.Sectors) { Int(5, 0x11, 0x80); StopRead(); return; }
         disc.ReadRaw(lba, raw);
         lastHeaderMin = raw[12]; lastHeaderSec = raw[13]; lastHeaderFrame = raw[14]; lastHeaderMode = raw[15];
@@ -223,7 +244,7 @@ public sealed class Cdrom(Psx m, Ps1tl.Disc disc)
         if ((mode & 0x08) != 0 && audio) return;
         if ((mode & 0x20) != 0) { Array.Copy(raw, 12, sectorBuf, 0, 0x924); sectorLen = 0x924; }
         else { Array.Copy(raw, 24, sectorBuf, 0, 0x800); sectorLen = 0x800; }
-        if (pending.Count > 4) return;   // the game is not keeping up: drop, like the real buffer would
+        if (Sink == null && pending.Count > 4) return;   // the game is not keeping up: drop, like the real buffer would
         Int(1, Stat());
     }
 
