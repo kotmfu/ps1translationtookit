@@ -20,6 +20,7 @@ public sealed class PsyQ(Psx m)
     public readonly LibPress Press = new(m);
     public readonly LibSpu Spu = new(m);
     public readonly LibPad Pad = new(m);
+    public readonly LibC C = new(m);
 
     /// <summary>
     /// Plug the native functions in at the addresses the symbol table gives for this executable;
@@ -49,6 +50,7 @@ public sealed class PsyQ(Psx m)
         foreach (var (k, v) in Press.Impl(symbols)) impl[k] = v;
         foreach (var (k, v) in Spu.Impl(symbols)) impl[k] = v;
         foreach (var (k, v) in Pad.Impl(symbols)) impl[k] = v;
+        foreach (var (k, v) in C.Impl(symbols)) impl[k] = v;
         int n = 0;
         foreach (var (name, addr) in symbols)
             if (impl.TryGetValue(name, out var f))
@@ -231,6 +233,17 @@ public static class Symbols
             ["PadInitDirect"] = 0x8003FD18, ["PadStartCom"] = 0x8003D858, ["PadStopCom"] = 0x8003D878,
             ["PadGetState"] = 0x8003D8E4, ["PadInfoMode"] = 0x8003D9B0, ["PadSetAct"] = 0x8003DC24,
             ["PadSetActAlign"] = 0x8003DCA4,
+        },
+        // Gunparade March (SCPS-10136): a newer PsyQ. Its libgpu and VSync code matches Yuuyami's; ResetGraph,
+        // PutDrawEnv and DrawSync keep Sony's code here because the game also uses libgpu calls that aren't
+        // replaced (they share Sony's internal state). libcd/libpress/libpad/libspu are different versions and
+        // stay recompiled Sony code.
+        [0x0EBAB67C] = new()
+        {
+            ["DrawSyncCallback"] = 0x8007D604, ["SetDispMask"] = 0x8007D664, ["ClearImage"] = 0x8007D880,
+            ["LoadImage"] = 0x8007D9A8, ["StoreImage"] = 0x8007DA08, ["ClearOTag"] = 0x8007DB20,
+            ["ClearOTagR"] = 0x8007DBE8, ["DrawOTag"] = 0x8007DCF0, ["PutDispEnv"] = 0x8007DF2C,
+            ["VSync"] = 0x8007C62C, ["setjmp"] = 0x80075B7C, ["longjmp"] = 0x80075BB8,
         },
     };
 }

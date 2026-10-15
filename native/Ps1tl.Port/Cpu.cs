@@ -44,6 +44,19 @@ public sealed unsafe partial class Psx
     /// </summary>
     public void Interpret(uint pc, uint stopRa, uint stopSp)
     {
+        // a longjmp to a setjmp made in this frame lands here (LibC)
+        int frame = Sdk.C.Enter();
+        try
+        {
+            while (true)
+                try { Run(pc, stopRa, stopSp); return; }
+                catch (LibC.LongJmp j) when (j.Frame == frame) { pc = j.Pc; }
+        }
+        finally { Sdk.C.Leave(); }
+    }
+
+    void Run(uint pc, uint stopRa, uint stopSp)
+    {
         uint next = pc + 4;
         bool jumped = true;       // pc was reached by a jump: check for natives / HLE / the return
         bool inDelay = false;

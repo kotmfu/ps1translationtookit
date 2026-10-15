@@ -287,6 +287,9 @@ public static class Recomp
             Line("var r = m.R;");
             Line("bool bc; uint bt;");
             Line("uint ra0 = r[31], sp0 = r[29];   // how the interpreter recognises this function returning");
+            sb.AppendLine("#if CHECKREGS");
+            Line("uint s0e = r[16], s1e = r[17], s2e = r[18], s3e = r[19], s4e = r[20], s5e = r[21], s6e = r[22], s7e = r[23], fpe = r[30];");
+            sb.AppendLine("#endif");
             Line("if (m.Cycles >= m.NextEvent) m.Tick();");
             if (!f.Labels.Contains(f.Entry) || f.Body.Count == 0) { Line($"m.Interpret({Hex(f.Entry)}, ra0, sp0); return;"); }
             Line($"goto L_{f.Entry:X8};");
@@ -377,7 +380,14 @@ public static class Recomp
                 return pc + 8;
             }
             // jr
-            if (rs == 31) { Line(delay); Flush(); Line("return;"); return null; }
+            if (rs == 31)
+            {
+                Line(delay); Flush();
+                sb.AppendLine("#if CHECKREGS");
+                Line($"if (r[16] != s0e || r[17] != s1e || r[18] != s2e || r[19] != s3e || r[20] != s4e || r[21] != s5e || r[22] != s6e || r[23] != s7e || r[30] != fpe || r[29] != sp0) Psx.Log($\"CHECKREGS {f.Entry:X8} returns at {pc:X8} with s0 {{s0e:X8}}->{{r[16]:X8}} s1 {{s1e:X8}}->{{r[17]:X8}} sp {{sp0:X8}}->{{r[29]:X8}} f{{m.Frame}}\");");
+                sb.AppendLine("#endif");
+                Line("return;"); return null;
+            }
             Line($"bt = {R(rs)};");
             Line(delay); Flush();
             if (f.Tables.TryGetValue(pc, out var tab))
@@ -480,6 +490,9 @@ public static class Recomp
         var funcs = entries.OrderBy(e => e).Select(e => Discover(img, e, entries)).Where(f => f.Body.Count > 0).ToList();
         // SDK functions are called through the dispatch table so their native versions (PsyQ.cs) take over
         var sdk = Symbols.ByExe.TryGetValue(Ps1tl.Crc32.Of(exe), out var syms) ? syms.Values.ToHashSet() : [];
+        // functions that call setjmp stay interpreted: a longjmp resumes them mid-function (LibC)
+        uint setjmp = syms?.GetValueOrDefault("setjmp") ?? 0;
+        if (setjmp != 0) funcs.RemoveAll(f => f.Body.Any(pc => Op(img.At(pc)) == 3 && JumpTarget(img.At(pc), pc) == setjmp));
         var exeDirect = funcs.Where(f => !sdk.Contains(f.Entry)).ToDictionary(f => f.Entry, f => Name(f.Entry));
         Directory.CreateDirectory(outDir);
         foreach (var old in Directory.GetFiles(outDir, "*.g.cs")) File.Delete(old);

@@ -12,8 +12,9 @@ public sealed class LibPad(Psx m)
     uint V0 { set => m.R[2] = value; }
 
     /// <summary>
-    /// CPU time Sony's driver takes in each vblank interrupt (measured: ~10,000 cycles). The game's scene loading
-    /// depends on it: without it Yuuyami's school scene corrupts a model's part table and crashes (frame 2355)
+    /// CPU time Sony's driver takes in each vblank interrupt (measured: ~10,000 cycles). Games are tuned to it:
+    /// without it Yuuyami's school scene runs its per-frame model update one frame after setting the model up
+    /// (instead of two), part 21's update writes over part 22's pointer, and the game jumps to 0 (frame 2355)
     /// </summary>
     const long DriverCycles = 10_000;
     uint buf1, buf2;

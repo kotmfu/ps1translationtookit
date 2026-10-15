@@ -77,6 +77,9 @@ How it works:
   Yuuyami's scene loading depends on that timing); memory cards already go through the BIOS card/file calls, which
   read and write the save files directly. `--emulate-sdk` runs Sony's own code for everything,
   `--emulate-cd` / `--emulate-press` / `--emulate-spu` / `--emulate-pad` just for that library.
+  Other games get whatever of this matches their SDK version (Gunparade March: libgpu and VSync).
+- Games that switch tasks with setjmp/longjmp (Gunparade March's scheduler) run each guest task on its own host
+  thread (`LibC.cs`); functions that call setjmp stay interpreted so a longjmp can resume them mid-function.
 - Anything not recompiled runs in the interpreter (`Cpu.cs`), which is also the reference (`--interp`).
 - Debugging: `--headless --frames=N --shots=a,b --press=frame:button[:frames],... --wav --trace --cdtrace --gputrace`,
   `--dis=addr,count` (after a headless run: disassembles RAM, so overlays too), `--ram` (dump RAM), and with `--interp`:
@@ -84,9 +87,10 @@ How it works:
   A headless run writes `entries.txt` (entry points it had to interpret) and `portdata/overlays/` for the next
   recompile (`--overlays=dir` points the recompiler at them). `--map=file` lists every function with the
   hardware it touches; `--ioprof` (with `--interp`) records which code touches which device; `--sdktrace` logs
-  every native SDK call; `--selftest` checks the saves and the libcds ring buffer.
+  every native SDK call; `--selftest` checks the saves and the libcds ring buffer. Building with
+  `-p:DefineConstants=CHECKREGS` makes every recompiled function report returning with s0-s7/fp/sp changed.
 
 Status: Yuuyami Doori Tankentai plays through the intro FMVs, title, school and street scenes into the
 Torizuka forest prologue (walking, events, the notebook/discussion screen); save/load is untested because the
-prologue could not be finished headless yet. Gunparade March boots to its title menu (interpreted; recompile it
-the same way). Audio has SPU reverb; output is winmm on Windows and pw-cat / pacat / aplay elsewhere.
+prologue could not be finished headless yet. Gunparade March is recompiled too and plays through its intro
+movie and opening story into the first school scenes. Audio has SPU reverb; output is winmm on Windows and pw-cat / pacat / aplay elsewhere.
