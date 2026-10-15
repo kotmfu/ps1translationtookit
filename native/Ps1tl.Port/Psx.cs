@@ -350,6 +350,7 @@ public sealed unsafe partial class Psx
             Irq(0);
             Spu.Frame();
             Bios.Card?.Tick();
+            Sdk.Pad.VBlank();
             OnVBlank?.Invoke();
         }
         for (int i = 0; i < timed.Count; i++)

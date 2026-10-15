@@ -106,6 +106,17 @@ public sealed class Spu(Psx m)
         for (int i = 0; i < 4; i++) { Ram[xferAddr] = (byte)(w >> (i * 8)); CheckIrq(xferAddr); xferAddr = (xferAddr + 1) & 0x7FFFF; }
     }
 
+    /// <summary>native libspu: copy between main RAM and SPU RAM at byte address spuAddr</summary>
+    public void Transfer(uint spuAddr, Span<byte> ram, bool toSpu)
+    {
+        xferAddr = spuAddr & 0x7FFFF;
+        for (int i = 0; i < ram.Length; i++)
+        {
+            if (toSpu) { Ram[xferAddr] = ram[i]; CheckIrq(xferAddr); } else ram[i] = Ram[xferAddr];
+            xferAddr = (xferAddr + 1) & 0x7FFFF;
+        }
+    }
+
     public uint DmaRead()
     {
         uint w = 0;

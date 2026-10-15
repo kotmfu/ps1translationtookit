@@ -18,6 +18,8 @@ public sealed class PsyQ(Psx m)
     public static bool Trace;
     public readonly LibCd Cd = new(m);
     public readonly LibPress Press = new(m);
+    public readonly LibSpu Spu = new(m);
+    public readonly LibPad Pad = new(m);
 
     /// <summary>
     /// Plug the native functions in at the addresses the symbol table gives for this executable;
@@ -45,6 +47,8 @@ public sealed class PsyQ(Psx m)
         };
         foreach (var (k, v) in Cd.Impl(symbols)) impl[k] = v;
         foreach (var (k, v) in Press.Impl(symbols)) impl[k] = v;
+        foreach (var (k, v) in Spu.Impl(symbols)) impl[k] = v;
+        foreach (var (k, v) in Pad.Impl(symbols)) impl[k] = v;
         int n = 0;
         foreach (var (name, addr) in symbols)
             if (impl.TryGetValue(name, out var f))
@@ -222,6 +226,11 @@ public static class Symbols
             ["DecDCTReset"] = 0x8003B9D8, ["DecDCTin"] = 0x8003BB30, ["DecDCTout"] = 0x8003BBAC,
             ["DecDCToutCallback"] = 0x8003BC68, ["DecDCTvlc"] = 0x8003C088, ["@ResetCallback"] = 0x800313D8,
             ["@DecDCTquant"] = 0x8004FDAC, ["@DecDCTscale"] = 0x8004FE30, ["@DecDCTvlcState"] = 0x8004FEFC,
+            ["_spu_t"] = 0x8002467C, ["_spu_writeByIO"] = 0x80024358, ["@_spu_tsa"] = 0x800489A4,
+            ["@_spu_mem_mode_plus"] = 0x800489B4, ["@_spu_transferCallback"] = 0x800489C4, ["@_spu_dir"] = 0x800489DC,
+            ["PadInitDirect"] = 0x8003FD18, ["PadStartCom"] = 0x8003D858, ["PadStopCom"] = 0x8003D878,
+            ["PadGetState"] = 0x8003D8E4, ["PadInfoMode"] = 0x8003D9B0, ["PadSetAct"] = 0x8003DC24,
+            ["PadSetActAlign"] = 0x8003DCA4,
         },
     };
 }

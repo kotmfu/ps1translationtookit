@@ -70,9 +70,13 @@ How it works:
   the game's CD callbacks as native interrupts; movie sectors go straight into the game's libcds ring buffer.
   No CD registers or CD DMA are touched. libpress (`LibPress.cs`) decodes FMV frames natively: DecDCTvlc in C#
   (byte-identical to Sony's, `--vlccheck` compares the two on every frame), DecDCTin/out straight to the MDEC
-  decoder, so no MDEC registers or DMA 0/1. Still on the emulated hardware path for now: libspu, the pad driver
-  and the memory card driver. `--emulate-sdk` runs Sony's own code for everything, `--emulate-cd` /
-  `--emulate-press` just for that library.
+  decoder, so no MDEC registers or DMA 0/1. libspu's transfers (`LibSpu.cs`: sample banks, reverb clears)
+  copy straight into sound RAM with no DMA 4; voices and volumes still reach the SPU mixer through its
+  registers. libpad (`LibPad.cs`) fills the game's pad buffers from the controller once a frame instead of
+  talking to the pads over the serial port (it still charges the ~10,000 cycles per vblank Sony's driver took:
+  Yuuyami's scene loading depends on that timing); memory cards already go through the BIOS card/file calls, which
+  read and write the save files directly. `--emulate-sdk` runs Sony's own code for everything,
+  `--emulate-cd` / `--emulate-press` / `--emulate-spu` / `--emulate-pad` just for that library.
 - Anything not recompiled runs in the interpreter (`Cpu.cs`), which is also the reference (`--interp`).
 - Debugging: `--headless --frames=N --shots=a,b --press=frame:button[:frames],... --wav --trace --cdtrace --gputrace`,
   `--dis=addr,count` (after a headless run: disassembles RAM, so overlays too), `--ram` (dump RAM), and with `--interp`:

@@ -48,9 +48,11 @@ static class Program
         // native SDK: replaces the hardware-level library code (--emulate-sdk keeps Sony's code on emulated hardware)
         if (!flags.Contains("--emulate-sdk") && Symbols.ByExe.TryGetValue(Ps1tl.Crc32.Of(Boot.BootExe(disc).Data), out var syms))
         {
-            // --emulate-cd / --emulate-press: keep Sony's code for just that library
+            // --emulate-cd / -press / -spu / -pad: keep Sony's code for just that library
             string[] keep = [.. flags.Contains("--emulate-cd") ? ["Cd", "St", "@St"] : Array.Empty<string>(),
-                             .. flags.Contains("--emulate-press") ? ["DecDCT", "@DecDCT"] : Array.Empty<string>()];
+                             .. flags.Contains("--emulate-press") ? ["DecDCT", "@DecDCT"] : Array.Empty<string>(),
+                             .. flags.Contains("--emulate-spu") ? ["_spu", "@_spu"] : Array.Empty<string>(),
+                             .. flags.Contains("--emulate-pad") ? ["Pad"] : Array.Empty<string>()];
             Psx.Log($"native SDK: {m.Sdk.Install(syms.Where(k => !keep.Any(k.Key.StartsWith)).ToDictionary())} functions");
         }
         // --dis=addr[,count]: disassemble the loaded executable, or memory at the end of a --headless run (overlays)
