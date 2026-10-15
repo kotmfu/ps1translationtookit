@@ -193,6 +193,7 @@ public sealed class Project
         {
             var w = Script!.Images![l.Image!].W;
             if (en.Length == 0) return (0, w, false);
+            if (Script.Images[l.Image!].H > Images.MaxH) return (EnglishWidth(en), w, false);   // photos: drawn by the game plugin
             var (idx, pal) = Picture(l);
             return (EnglishWidth(en), w, !Images.Draw(idx, pal, en).Fits);
         }
@@ -268,6 +269,11 @@ public sealed class Project
     {
         if (i is int k && Script!.Lines[k].IsImage)
         {
+            if (Yuuyami.IsDisclaimer(Script, Script.Lines[k]))
+            {
+                var f = Pics()[Yuuyami.DisclaimerFile];
+                return Yuuyami.DisclaimerPng(text.Length > 0 ? Yuuyami.DrawDisclaimer(f, text) : f);
+            }
             var (idx, pal) = Picture(Script.Lines[k]);
             return Images.Png(text.Length > 0 ? Images.Draw(idx, pal, text).Idx : idx, pal, 3);
         }

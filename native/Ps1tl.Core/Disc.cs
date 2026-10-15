@@ -12,6 +12,8 @@ public sealed class Disc : IDisposable
     readonly FileStream f;
     /// <summary>path -> (directory sector lba, byte offset of the record in it), filled by Files()</summary>
     public Dictionary<string, (int Lba, int Offset)> Records { get; } = new();
+    /// <summary>every directory's extent, filled by Files()</summary>
+    public List<(int Lba, int Sectors)> Dirs { get; } = new();
 
     public Disc(string cue)
     {
@@ -52,10 +54,12 @@ public sealed class Disc : IDisposable
         var outp = new Dictionary<string, (int, int)>();
         var seen = new HashSet<int>();
         Records.Clear();
+        Dirs.Clear();
         while (stack.Count > 0)
         {
             var (path, lba, size) = stack.Pop();
             if (!seen.Add(lba)) continue;
+            Dirs.Add((lba, (size + 2047) / 2048));
             var data = Read(lba, size);
             int i = 0;
             while (i < data.Length)

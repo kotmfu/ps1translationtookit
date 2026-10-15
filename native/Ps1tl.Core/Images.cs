@@ -169,11 +169,14 @@ public static class Images
     }
 
     /// <summary>-> (new indices, fits). Same size as the original; English replaces everything but the
-    /// background. Tall narrow pictures (vertical Japanese) get the English rotated to read top to bottom.</summary>
+    /// background. Tall narrow pictures (vertical or slanted Japanese) get the English rotated to read top to bottom.</summary>
     public static (byte[,] Idx, bool Fits) Draw(byte[,] idx, ushort[] pal, string text)
     {
         int h = idx.GetLength(0), w = idx.GetLength(1);
-        if (h >= 2 * w && h >= 16)
+        // twice as tall as wide (vertical Japanese): always rotated. Fairly tall (Yuuyami's slanted map labels, 1.58-1.94;
+        // its 20x30 weekday boxes are 1.5): rotated only when the English doesn't fit flat
+        var flat = h >= 2 * w ? default : DrawFlat(idx, pal, text);
+        if (h >= 16 && (h >= 2 * w || !flat.Item2 && h * 100 >= w * 155))
         {
             var rot = new byte[w, h];   // counter-clockwise
             for (int i = 0; i < w; i++) for (int j = 0; j < h; j++) rot[i, j] = idx[j, w - 1 - i];
@@ -182,7 +185,7 @@ public static class Images
             for (int i = 0; i < h; i++) for (int j = 0; j < w; j++) back[i, j] = nw[w - 1 - j, i];
             return (back, fits);
         }
-        return DrawFlat(idx, pal, text);
+        return flat.Item1 != null ? flat : DrawFlat(idx, pal, text);
     }
 
     /// <summary>
@@ -220,7 +223,8 @@ public static class Images
                 boxes.Add((bx0, by0, bx1 + 1, by1 + 1));
             }
         int ring = Enumerable.Range(1, boxes.Count - 1).FirstOrDefault(i =>
-            boxes[i].X1 - boxes[i].X0 >= (ink.X1 - ink.X0) * 0.9 && boxes[i].Y1 - boxes[i].Y0 >= (ink.Y1 - ink.Y0) * 0.9 && boxes[i].Y1 - boxes[i].Y0 >= 12);
+            boxes[i].X1 - boxes[i].X0 >= (ink.X1 - ink.X0) * 0.9 && boxes[i].Y1 - boxes[i].Y0 >= (ink.Y1 - ink.Y0) * 0.9 && boxes[i].Y1 - boxes[i].Y0 >= 12
+            && boxes[i].X1 - boxes[i].X0 > boxes[i].Y1 - boxes[i].Y0);   // buttons are wide (a kanji's own outline is not a plate)
         if (ring == 0) return null;
         var (rx0, ry0, rx1, ry1) = boxes[ring];
         var inner = (X0: rx0 + 2, Y0: ry0 + 2, X1: rx1 - 2, Y1: ry1 - 2);
@@ -335,7 +339,7 @@ public static class Images
         var tight = new List<string>();
         foreach (var l in script.Lines)
         {
-            if (!l.IsImage) continue;
+            if (!l.IsImage || script.Images![l.Image!].H > MaxH) continue;   // photos: the game plugin draws those
             var text = labels ? l.Key.Substring(Prefix.Length, Math.Min(6, l.Key.Length - Prefix.Length)) : enFor(l);
             if (string.IsNullOrEmpty(text)) continue;
             foreach (var r in script.Images![l.Image!].Refs)

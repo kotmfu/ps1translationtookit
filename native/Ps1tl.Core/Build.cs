@@ -69,9 +69,9 @@ public static class Build
     }
 
     /// <summary>relocate a file's raw sectors (any form) to endLba; only header addresses change</summary>
-    static int MoveToEnd(FileStream f, Disc disc, string path, int endLba)
+    static int MoveToEnd(FileStream f, Disc disc, Dictionary<string, (int Lba, int Size)> files, string path, int endLba)
     {
-        var (lba, size) = disc.Files()[path];
+        var (lba, size) = files[path];
         int n = (size + 2047) / 2048;
         for (int c = 0; c < n; c += 4096)
         {
@@ -82,6 +82,7 @@ public static class Build
             f.Write(raw);
         }
         SetRecord(f, disc, path, endLba, size);
+        files[path] = (endLba, size);
         return endLba + n;
     }
 
@@ -99,30 +100,41 @@ public static class Build
         Directory.CreateDirectory(outDir);
         var outBin = Path.Combine(outDir, name + ".bin");
         File.Copy(disc.Path, outBin, true);
+        // where each file is in the copy so far (replacing one can move others)
+        var files = new Dictionary<string, (int Lba, int Size)>(disc.Files());
         using (var f = new FileStream(outBin, FileMode.Open, FileAccess.ReadWrite))
-            foreach (var (path, data) in repl) Replace(f, disc, path, data);
+            foreach (var (path, data) in repl) Replace(f, disc, files, path, data);
         var outCue = Path.Combine(outDir, name + ".cue");
         File.WriteAllText(outCue, $"FILE \"{name}.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n");
         return (outCue, outBin);
     }
 
-    static void Replace(FileStream f, Disc disc, string path, byte[] data)
+    static void Replace(FileStream f, Disc disc, Dictionary<string, (int Lba, int Size)> files, string path, byte[] data)
     {
-        var files = disc.Files();
         var (lba, size) = files[path];
         int oldN = (size + 2047) / 2048, newN = (data.Length + 2047) / 2048;
         var subs = Enumerable.Range(0, oldN).Select(i => ReadRaw(f, lba + i, 1)[16..24]).ToList();
         if (newN > oldN)
         {
-            // make room: move files that start inside the new extent to the end of the image
             int end = (int)(f.Length / S);
-            foreach (var (l, p) in files.Where(kv => lba < kv.Value.Lba && kv.Value.Lba < lba + newN)
-                                        .Select(kv => (kv.Value.Lba, kv.Key)).OrderBy(t => t.Lba).ThenBy(t => t.Key, StringComparer.Ordinal))
-                end = MoveToEnd(f, disc, p, end);
-            SetVolumeSize(f, end);
+            if (disc.Dirs.Any(d => d.Lba < lba + newN && d.Lba + d.Sectors > lba + oldN))
+            {
+                // a directory follows the file: the file itself goes to the end of the image
+                lba = end;
+                SetVolumeSize(f, end + newN);
+            }
+            else
+            {
+                // make room: move files that start inside the new extent to the end of the image
+                foreach (var (l, p) in files.Where(kv => lba < kv.Value.Lba && kv.Value.Lba < lba + newN)
+                                            .Select(kv => (kv.Value.Lba, kv.Key)).OrderBy(t => t.Lba).ThenBy(t => t.Key, StringComparer.Ordinal).ToList())
+                    end = MoveToEnd(f, disc, files, p, end);
+                SetVolumeSize(f, end);
+            }
         }
         WriteFileSectors(f, lba, data, subs);
         SetRecord(f, disc, path, lba, data.Length);
+        files[path] = (lba, data.Length);
     }
 
     // --- BPS -----------------------------------------------------------------------------------------------

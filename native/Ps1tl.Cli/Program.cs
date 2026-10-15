@@ -134,6 +134,21 @@ switch (a[0])
         }
         break;
     }
+    case "acd-versions":   // acd-versions game.cue [outdir]: ACD files per format version (and identical copies); one sample each to outdir
+    {
+        using var disc = new Disc(a[1]);
+        var (lba, size) = disc.Files()["/DATA/FILELINK.FLB"];
+        var byVer = new Dictionary<string, List<(string Path, byte[] D)>>();
+        foreach (var (path, d) in Flb.Walk(disc.Read(lba, size)))
+            if (d.Length > 8 && d[0] == 'A' && d[1] == 'C' && d[2] == 'D')
+                (byVer.TryGetValue(System.Text.Encoding.ASCII.GetString(d, 4, 4), out var l) ? l : byVer[System.Text.Encoding.ASCII.GetString(d, 4, 4)] = new()).Add((path, d));
+        foreach (var (v, l) in byVer)
+        {
+            Console.WriteLine($"{v}: {l.Count} files, {l.Select(x => Convert.ToHexString(MD5.HashData(x.D))).Distinct().Count()} distinct; e.g. {l[0].Path} ({l[0].D.Length} bytes)");
+            if (a.Length > 2) File.WriteAllBytes(Path.Combine(a[2], $"acd{v}.bin"), l[0].D);
+        }
+        break;
+    }
     case "acd-widths":   // acd-widths game.cue: Japanese row width percentiles (px) for 'ACD ' (cutscene) vs 'ACD\0' files
     {
         using var disc = new Disc(a[1]);
@@ -454,6 +469,31 @@ switch (a[0])
                         if ((font[ank + (code - 0x20) * 12 + y] >> (7 - x) & 1) != 0) im.Set(4 + c * 8 + x, 3 + r * 14 + y, Raster.Rgb(255, 255, 255));
             }
         File.WriteAllBytes(a[2], im.Scale(3).Png());
+        break;
+    }
+    case "pic-png":   // pic-png game.cue /003/000:0 out.png ["English"]: one picture (by its ref), or with English drawn in
+    {
+        using var d = new Disc(a[1]);
+        var g = GameOf(d);
+        int c = a[2].LastIndexOf(':');
+        var (idx, pal) = g.ImageData(g.ImageFiles(d)[a[2][..c]], int.Parse(a[2][(c + 1)..]));
+        if (a.Length > 4) { var (nw, fits) = Images.Draw(idx, pal, a[4].Replace("\\n", "\n")); idx = nw; Console.WriteLine(fits ? "fits" : "does not fit"); }
+        File.WriteAllBytes(a[3], Images.Png(idx, pal, 2));
+        break;
+    }
+    case "disclaimer-png":   // disclaimer-png game.cue out.png "English": Yuuyami's opening fiction notice with the English drawn in
+    {
+        using var d = new Disc(a[1]);
+        File.WriteAllBytes(a[2], Yuuyami.DisclaimerPng(Yuuyami.DrawDisclaimer(Yuuyami.ImageFiles(d)[Yuuyami.DisclaimerFile], a[3].Replace("\\n", "\n"))));
+        break;
+    }
+    case "set-en":   // set-en project.script.json key "English": set one line's English (\n = line break), saved as the app saves
+    {
+        var s = Script.Load(a[1]);
+        var l = s.Lines.FirstOrDefault(x => x.Key == a[2]) ?? throw new KeyNotFoundException(a[2]);
+        l.En = a[3].Replace("\\n", "\n");
+        s.Save(a[1]);
+        Console.WriteLine($"{l.Key}: {l.En.Replace("\n", " / ")}");
         break;
     }
     case "files":   // files game.cue: serial, then every ISO file by LBA with its size
