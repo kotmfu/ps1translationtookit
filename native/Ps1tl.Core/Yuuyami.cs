@@ -88,7 +88,7 @@ public static class Yuuyami
     public static Acd? ParseAcd(byte[] d)
     {
         if (d.Length <= 0x50 || !(d[0] == 'A' && d[1] == 'C' && d[2] == 'D' && (d[3] == 0 || d[3] == ' '))
-            || !d.AsSpan(4, 4).SequenceEqual("1.20"u8)) return null;
+            || !d.AsSpan(4, 4).SequenceEqual("1.20"u8)) return null;   // 1.10: a stick-figure animation (sprites, no text)
         var s = Enumerable.Range(0, 12).Select(i => U32(d, 12 + i * 4)).ToArray();
         if (s[6] - s[5] < 0x14) return null;
         int n = (s[7] - s[6]) / 4;   // metrics size; the u16 count in the font header undercounts some files
