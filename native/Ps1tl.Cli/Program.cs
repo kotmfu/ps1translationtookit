@@ -456,6 +456,22 @@ switch (a[0])
         File.WriteAllBytes(a[2], im.Scale(3).Png());
         break;
     }
+    case "pic-png":   // pic-png game.cue /003/000:0 out.png ["English"]: one picture (by its ref), or with English drawn in
+    {
+        using var d = new Disc(a[1]);
+        var g = GameOf(d);
+        int c = a[2].LastIndexOf(':');
+        var (idx, pal) = g.ImageData(g.ImageFiles(d)[a[2][..c]], int.Parse(a[2][(c + 1)..]));
+        if (a.Length > 4) { var (nw, fits) = Images.Draw(idx, pal, a[4].Replace("\\n", "\n")); idx = nw; Console.WriteLine(fits ? "fits" : "does not fit"); }
+        File.WriteAllBytes(a[3], Images.Png(idx, pal, 2));
+        break;
+    }
+    case "disclaimer-png":   // disclaimer-png game.cue out.png "English": Yuuyami's opening fiction notice with the English drawn in
+    {
+        using var d = new Disc(a[1]);
+        File.WriteAllBytes(a[2], Yuuyami.DisclaimerPng(Yuuyami.DrawDisclaimer(Yuuyami.ImageFiles(d)[Yuuyami.DisclaimerFile], a[3].Replace("\\n", "\n"))));
+        break;
+    }
     case "files":   // files game.cue: serial, then every ISO file by LBA with its size
     {
         using var disc = new Disc(a[1]);

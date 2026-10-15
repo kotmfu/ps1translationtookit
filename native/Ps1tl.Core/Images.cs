@@ -335,7 +335,7 @@ public static class Images
         var tight = new List<string>();
         foreach (var l in script.Lines)
         {
-            if (!l.IsImage) continue;
+            if (!l.IsImage || script.Images![l.Image!].H > MaxH) continue;   // photos: the game plugin draws those
             var text = labels ? l.Key.Substring(Prefix.Length, Math.Min(6, l.Key.Length - Prefix.Length)) : enFor(l);
             if (string.IsNullOrEmpty(text)) continue;
             foreach (var r in script.Images![l.Image!].Refs)

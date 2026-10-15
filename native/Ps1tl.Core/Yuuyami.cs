@@ -28,7 +28,7 @@ public static class Yuuyami
     public static readonly string[] Serials = ["SLPS_022.74"];
     public const string Name = "Yuuyami Doori Tankentai";
     /// <summary>bump when Extract() finds more text; open projects merge the new lines in</summary>
-    public const int ExtractorVersion = 5;   // 4: text after a file's last 0xFFFF; 5: rows split where a track starts
+    public const int ExtractorVersion = 6;   // 4: text after a file's last 0xFFFF; 5: rows split where a track starts; 6: disclaimer screen
     /// <summary>largest font page the game itself ships; growing past it is untested</summary>
     public const int MaxGlyphs = 465;
     const string FlbPath = "/DATA/FILELINK.FLB";
@@ -160,7 +160,9 @@ public static class Yuuyami
                 line.Refs.Add($"{path}:{m}");
             }
         }
-        return new Script { Game = Name, Glyphs = glyphs, Lines = lines.Values.ToList(), Images = ImageCatalog(pics) };
+        var images = ImageCatalog(pics);
+        if (DisclaimerLine(images) is { } d) lines[d.Key] = d;
+        return new Script { Game = Name, Glyphs = glyphs, Lines = lines.Values.ToList(), Images = images };
     }
 
     /// <summary>
@@ -554,6 +556,8 @@ public static class Yuuyami
         var (newPics, tight) = Images.Apply(Games.Of(script), pics, script, l => en.GetValueOrDefault(l.Key), labels);
         foreach (var (k, v) in newPics) repl[k] = v;
         foreach (var k in tight) problems[k] = "English clipped: does not fit the picture";
+        if (!labels && script.Lines.FirstOrDefault(l => IsDisclaimer(script, l)) is { } dl && en.GetValueOrDefault(dl.Key) is { Length: > 0 } dt)
+            repl[DisclaimerFile] = DrawDisclaimer(pics[DisclaimerFile], dt);
         var report = new InsertReport(repl.Count, problems, en.Count, tooWide);
         return (repl.Count > 0 ? new() { [FlbPath] = Flb.Rebuild(archive, repl) } : new(), report);
     }
@@ -647,5 +651,119 @@ public static class Yuuyami
                 else outp[o + x] = idx[y, x];
             }
         return outp;
+    }
+    // --- the opening "this game is fiction" screen ----------------------------------------------------------
+    // One 320x240 photo stored as two 160px halves with white text across both, so it is drawn here rather than
+    // by Images.Draw (which handles one small picture at a time).
+    public const string DisclaimerFile = "/003/000";
+    const string DisclaimerJa = "このゲームは\nすべてフィクションであり\n実在の人物・団体とは\nいっさい関係がありません。";
+
+    static Line? DisclaimerLine(Dictionary<string, ImageEntry> catalog) =>
+        catalog.FirstOrDefault(kv => kv.Value.Refs.Contains(DisclaimerFile + ":0")) is { Key: { } k, Value: { } e }
+            ? new Line { Key = Images.Prefix + k, Image = k, Refs = e.Refs, Ja = DisclaimerJa, JaSource = "pic" } : null;
+
+    public static bool IsDisclaimer(Script s, Line l) => l.IsImage && s.Images![l.Image!].Refs.Contains(DisclaimerFile + ":0");
+
+    /// <summary>the disclaimer file with the Japanese painted out of the photo and the English drawn across it</summary>
+    public static byte[] DrawDisclaimer(byte[] file, string text)
+    {
+        var halves = new[] { ImageData(file, 0), ImageData(file, 1) };
+        int h = halves[0].Idx.GetLength(0), hw = halves[0].Idx.GetLength(1), w = hw * 2;
+        static (int R, int G, int B) Rgb(ushort c) => (c & 31, c >> 5 & 31, c >> 10 & 31);
+        var px = new (int R, int G, int B)[h, w];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) { var (idx, pal) = halves[x / hw]; px[y, x] = Rgb(pal[idx[y, x % hw]]); }
+        static int Lum((int R, int G, int B) c) => c.R * 3 + c.G * 6 + c.B;
+        // the letters: near-white pixels (the photo is a dark night scene), grown by a pixel for their soft edge
+        var ink = new bool[h, w];
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) ink[y, x] = Lum(px[y, x]) >= 160;
+        int ty0 = h, ty1 = 0;
+        var mask = new bool[h, w];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                for (int dy = -1; dy <= 1 && !mask[y, x]; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        if (y + dy >= 0 && y + dy < h && x + dx >= 0 && x + dx < w && ink[y + dy, x + dx]) { mask[y, x] = true; ty0 = Math.Min(ty0, y); ty1 = Math.Max(ty1, y); break; }
+        // paint them out: blend each masked run from the photo either side of it
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                if (!mask[y, x]) continue;
+                int l = x, r = x;
+                while (l >= 0 && mask[y, l]) l--;
+                while (r < w && mask[y, r]) r++;
+                var a = l >= 0 ? px[y, l] : px[y, r];
+                var b = r < w ? px[y, r] : a;
+                double t = (x - l) / (double)(r - l);
+                px[y, x] = ((int)Math.Round(a.R + (b.R - a.R) * t), (int)Math.Round(a.G + (b.G - a.G) * t), (int)Math.Round(a.B + (b.B - a.B) * t));
+            }
+        // the English: the pixel font at double size, white with a dark shadow, centred where the Japanese was
+        var font = Font.Load("en_pixel");
+        const int S = 2, Gap = 1;
+        int Adv(string t) => t.Length == 0 ? 0 : t.Sum(c => font.Width(c) + Gap) - Gap;
+        var lines = new List<string>();
+        foreach (var para in text.Replace("\r", "").Split('\n'))
+        {
+            var cur = "";
+            foreach (var word in para.Split(' '))
+            {
+                var t2 = cur.Length > 0 ? cur + " " + word : word;
+                if (Adv(t2) * S <= w - 24 || cur.Length == 0) cur = t2; else { lines.Add(cur); cur = word; }
+            }
+            lines.Add(cur);
+        }
+        int lineH = (font['A'].Length + 4) * S;
+        int mid = ty1 > ty0 ? (ty0 + ty1) / 2 : h / 2, top = mid - lines.Count * lineH / 2;
+        void Dot(int x, int y, (int, int, int) c)
+        {
+            for (int i = 0; i < S; i++)
+                for (int j = 0; j < S; j++)
+                    if (y + j >= 0 && y + j < h && x + i >= 0 && x + i < w) px[y + j, x + i] = c;
+        }
+        for (int pass = 0; pass < 2; pass++)   // shadow, then the letters
+            for (int li = 0; li < lines.Count; li++)
+            {
+                int x = (w - Adv(lines[li]) * S) / 2, y = top + li * lineH;
+                foreach (var c in lines[li])
+                {
+                    var g = font[c];
+                    for (int ry = 0; ry < g.Length; ry++)
+                        for (int rx = 0; rx < g[ry].Length; rx++)
+                            if (g[ry][rx] == '#') Dot(x + rx * S + (pass == 0 ? 1 : 0), y + ry * S + (pass == 0 ? 1 : 0), pass == 0 ? (2, 2, 5) : (31, 31, 31));
+                    x += (font.Width(c) + Gap) * S;
+                }
+            }
+        // back to each half's own palette
+        for (int k = 0; k < 2; k++)
+        {
+            var (_, pal) = halves[k];
+            var nw = new byte[h, hw];
+            var near = new Dictionary<(int, int, int), byte>();
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < hw; x++)
+                {
+                    var c = px[y, k * hw + x];
+                    if (!near.TryGetValue(c, out var v))
+                        near[c] = v = (byte)Enumerable.Range(0, pal.Length).MinBy(i =>
+                        {
+                            var p = Rgb(pal[i]);
+                            return (p.R - c.R) * (p.R - c.R) + (p.G - c.G) * (p.G - c.G) + (p.B - c.B) * (p.B - c.B);
+                        });
+                    nw[y, x] = v;
+                }
+            file = PutImage(file, k, nw);
+        }
+        return file;
+    }
+
+    /// <summary>both halves of the disclaimer side by side, at 2x</summary>
+    public static byte[] DisclaimerPng(byte[] file)
+    {
+        var (l, lp) = ImageData(file, 0);
+        var (r, rp) = ImageData(file, 1);
+        var both = new Raster(l.GetLength(1) * 2, l.GetLength(0));
+        both.Blit(Images.ToRaster(l, lp), 0, 0);
+        both.Blit(Images.ToRaster(r, rp), l.GetLength(1), 0);
+        return both.Scale(2).Png();
     }
 }
