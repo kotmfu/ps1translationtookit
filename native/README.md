@@ -28,5 +28,69 @@ artifacts).
   and Gunparade March (EVDATA.BIN event scripts, Shift-JIS text, half-width English font), picture drawing,
   CSV translation files, Claude client (CLI or API, streaming), jobs, and the project model.
 - `Ps1tl.App`: the desktop editor.
+- `Ps1tl.Port` (`ps1port`): experimental native PC port, see below.
 - `Ps1tl.Cli` (`ps1tl-cli`): `extract`, `insert`, `patch`, `apply`, `llm-test` for scripting and checks, plus
   reverse-engineering helpers (`files`, `dump`, `sjis-scan`, `evd-show`, `gpm-roundtrip`, `gpm-font`, ...).
+
+## PC port (experimental)
+
+`Ps1tl.Port` turns a game's executable into C# (static recompilation) and runs it natively against a
+software PS1: GPU rasteriser, CD-ROM controller, SPU + XA audio, MDEC (FMVs), GTE, timers/DMA/IRQs and a
+high-level BIOS (no Sony BIOS needed).
+
+Saves work like a native game's: there is no memory card to manage. Each save the game makes is its own file
+in `%APPDATA%\ps1port\<serial>\saves\` (`~/.config/ps1port/<serial>/saves/` on Linux), written atomically
+half a second after the game finishes writing. An old `<game>.mcd` next to the `.cue` is imported on first run.
+
+```
+port.ps1 "path\to\game.cue"            # Windows -> dist\port-win-x64\ps1port.exe
+./port.sh path/to/game.cue linux-x64   # Linux   -> dist/port-linux-x64/ps1port
+```
+
+Run `ps1port game.cue` (or put the `.cue`/`.bin` next to it). Any game controller works (SDL3: Xbox,
+DualShock/DualSense, Switch, generic pads; hot-plug; d-pad or left stick), mapped by position: south = Cross,
+east = Circle, west = Square, north = Triangle, shoulders/triggers = L1/R1/L2/R2, stick clicks = L3/R3, guide =
+fast forward. Keyboard: arrows, Z = Cross, X = Circle, A = Square, S = Triangle, Enter = Start, Backspace =
+Select, Q/W = L1/R1, 1/2 = L2/R2, Tab = fast forward, F11 = fullscreen. Both are remappable in `controls.json`
+next to the saves (controller names: SDL's, e.g. `dpup`, `leftshoulder`, `+leftx`; keys: Avalonia `Key` names). Patched discs work as long as the executable is unchanged (the recompiled code checks
+the EXE's CRC and falls back to the interpreter otherwise). `--dither` turns the console's dithering back on.
+
+How it works:
+- `Recomp.cs` turns the game's MIPS code into C#: one method per function (entry point, `jal` targets, function
+  pointers, plus `entries.txt` from earlier runs), gotos for branches, delay slots folded in, jump tables as
+  switches. Output goes to `Ps1tl.Port/Generated/` (game code: never commit or distribute it; a build that
+  contains it contains the game).
+- Overlays (code the game loads from disc at run time) are recompiled too: runs save each disc load the game
+  executes code from to `overlays/`, the next recompile turns them into C#, and each function switches in when
+  RAM holds exactly the code it was made from (`Overlays.cs`).
+- Sony's SDK libraries are replaced, not recompiled (`PsyQ.cs`, with a per-executable symbol table): libgpu
+  (`DrawOTag`, `LoadImage`, `PutDrawEnv`, ...) draws straight into the renderer and `VSync` is the frame loop,
+  so graphics never go through emulated GPU registers, DMA or interrupts. libcd and libcds (`LibCd.cs`) send
+  commands straight to the drive model (disc image, read timing, XA audio into the SPU) and hand its answers to
+  the game's CD callbacks as native interrupts; movie sectors go straight into the game's libcds ring buffer.
+  No CD registers or CD DMA are touched. libpress (`LibPress.cs`) decodes FMV frames natively: DecDCTvlc in C#
+  (byte-identical to Sony's, `--vlccheck` compares the two on every frame), DecDCTin/out straight to the MDEC
+  decoder, so no MDEC registers or DMA 0/1. libspu's transfers (`LibSpu.cs`: sample banks, reverb clears)
+  copy straight into sound RAM with no DMA 4; voices and volumes still reach the SPU mixer through its
+  registers. libpad (`LibPad.cs`) fills the game's pad buffers from the controller once a frame instead of
+  talking to the pads over the serial port (it still charges the ~10,000 cycles per vblank Sony's driver took:
+  Yuuyami's scene loading depends on that timing); memory cards already go through the BIOS card/file calls, which
+  read and write the save files directly. `--emulate-sdk` runs Sony's own code for everything,
+  `--emulate-cd` / `--emulate-press` / `--emulate-spu` / `--emulate-pad` just for that library.
+  Other games get whatever of this matches their SDK version (Gunparade March: libgpu and VSync).
+- Games that switch tasks with setjmp/longjmp (Gunparade March's scheduler) run each guest task on its own host
+  thread (`LibC.cs`); functions that call setjmp stay interpreted so a longjmp can resume them mid-function.
+- Anything not recompiled runs in the interpreter (`Cpu.cs`), which is also the reference (`--interp`).
+- Debugging: `--headless --frames=N --shots=a,b --press=frame:button[:frames],... --wav --trace --cdtrace --gputrace`,
+  `--dis=addr,count` (after a headless run: disassembles RAM, so overlays too), `--ram` (dump RAM), and with `--interp`:
+  `--prof=frame` (per-pc and I/O read counts from that frame) and `--trap=addr` (log registers at a pc).
+  A headless run writes `entries.txt` (entry points it had to interpret) and `portdata/overlays/` for the next
+  recompile (`--overlays=dir` points the recompiler at them). `--map=file` lists every function with the
+  hardware it touches; `--ioprof` (with `--interp`) records which code touches which device; `--sdktrace` logs
+  every native SDK call; `--selftest` checks the saves and the libcds ring buffer. Building with
+  `-p:DefineConstants=CHECKREGS` makes every recompiled function report returning with s0-s7/fp/sp changed.
+
+Status: Yuuyami Doori Tankentai plays through the intro FMVs, title, school and street scenes into the
+Torizuka forest prologue (walking, events, the notebook/discussion screen); save/load is untested because the
+prologue could not be finished headless yet. Gunparade March is recompiled too and plays through its intro
+movie and opening story into the first school scenes. Audio has SPU reverb; output is winmm on Windows and pw-cat / pacat / aplay elsewhere.

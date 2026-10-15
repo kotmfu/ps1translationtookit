@@ -43,6 +43,13 @@ public sealed class Disc : IDisposable
         return size == out_.Length ? out_ : out_[..size];
     }
 
+    /// <summary>one whole 2352-byte sector (sync, header, subheader, data, EDC/ECC)</summary>
+    public void ReadRaw(int lba, Span<byte> dst)
+    {
+        f.Seek((long)lba * Sector, SeekOrigin.Begin);
+        f.ReadExactly(dst[..Sector]);
+    }
+
     /// <summary>{path: (lba, size)} for every file in the ISO9660 tree</summary>
     public Dictionary<string, (int Lba, int Size)> Files()
     {

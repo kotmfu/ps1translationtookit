@@ -2,4 +2,5 @@
   <Project Path="Ps1tl.App/Ps1tl.App.csproj" />
   <Project Path="Ps1tl.Cli/Ps1tl.Cli.csproj" />
   <Project Path="Ps1tl.Core/Ps1tl.Core.csproj" />
+  <Project Path="Ps1tl.Port/Ps1tl.Port.csproj" />
 </Solution>
