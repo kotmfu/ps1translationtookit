@@ -130,10 +130,18 @@ public static class GpmStrings
     public static List<Str> Strings(byte[] d, uint b)
     {
         var (refs, debug, _) = Scan(d, b);
+        // the code: between the first and last function a jal reaches. Instruction bytes there can look like
+        // Shift-JIS (a jal's low bytes E8 F3 00 = one kanji) and a stray data word can point at them; writing English
+        // over them breaks the code, and no real text lives there
+        int start = b == ExeBase ? 0x800 : 0;
+        uint codeLo = uint.MaxValue, codeHi = 0;
+        for (int o = start; o + 4 <= d.Length; o += 4)
+            if (W(d, o) >> 26 == 3 && (0x80000000 | (W(d, o) & 0x3FFFFFF) << 2) is var t && t >= b + start && t < b + (uint)d.Length)
+                (codeLo, codeHi) = (Math.Min(codeLo, t), Math.Max(codeHi, t));
         var outp = new List<Str>();
         foreach (var (a, ptrs) in refs.OrderBy(kv => kv.Key))
         {
-            if (debug.Contains(a)) continue;
+            if (debug.Contains(a) || a >= codeLo && a < codeHi) continue;
             int off = (int)(a - b);
             if (outp.Count > 0 && off <= outp[^1].Off + outp[^1].Len) continue;   // a pointer into the middle of a string
             if (TextAt(d, off, out int len) is not string ja) continue;
@@ -189,8 +197,9 @@ public static class GpmStrings
         return b.ToArray();
     }
 
-    /// <summary>full-width letters per prologue line (its window is 0x118 = 280 px, 12 px a letter)</summary>
-    const int FullCols = 22;
+    /// <summary>full-width letters per prologue line (its window is 0x118 = 280 px, 12 px a letter); the window shows
+    /// 4 lines and each string is one page (more lines grow upward out of the window)</summary>
+    public const int FullCols = 22, FullRows = 4;
 
     /// <summary>
     /// write English into one file. en(string) -> English or null to keep. -> (new bytes or null if unchanged, strings

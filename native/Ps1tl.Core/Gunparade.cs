@@ -220,9 +220,12 @@ public sealed class Gunparade : IGame
         if (repl.Count > 0) outp[ArchivePath] = Evdata.Rebuild(archive, repl);
         foreach (var (path, b) in GpmStrings.Files(disc))
         {
-            var (nw, noRoom) = GpmStrings.Insert(Read(disc, path), b, x =>
-                GpmStrings.Display(x.Ja) is var t && t.Trim().Length == 0 ? null
-                : labels ? Label(GpmStrings.Ref(path, x.Addr)) : en.GetValueOrDefault(Key(t)), GpmStrings.Room(disc, path));
+            string? En(GpmStrings.Str x) => GpmStrings.Display(x.Ja) is var t && t.Trim().Length == 0 ? null
+                : labels ? Label(GpmStrings.Ref(path, x.Addr)) : en.GetValueOrDefault(Key(t));
+            var (nw, noRoom) = GpmStrings.Insert(Read(disc, path), b, En, GpmStrings.Room(disc, path));
+            foreach (var x in GpmStrings.Strings(Read(disc, path), b))
+                if (x.Ja.Contains('$') && !labels && En(x) is { } t && Wrap(t, GpmStrings.FullCols).Count is var n && n > GpmStrings.FullRows)
+                    tooWide.Add(GpmStrings.Ref(path, x.Addr));   // the window shows FullRows lines: the rest grow out of it
             if (nw != null) { outp[path] = nw; repl[path] = nw; }
             foreach (var a in noRoom) problems[GpmStrings.Ref(path, a)] = "no room in the file for this English: kept Japanese";
         }
